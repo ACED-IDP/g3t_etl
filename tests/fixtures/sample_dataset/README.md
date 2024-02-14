@@ -1,4 +1,4 @@
-# Test Data for IDP_UCL_VS_dataset
+# Test Data for sample_dataset
 
 This directory contains test data for the IDP UCL VS dataset.
 

@@ -114,8 +114,8 @@ and submission.schema.json is the master data dictionary.
 ##### Transforming a csv file to FHIR
 
 ```bash
-$ g3t_etl transform tests/fixtures/IDP_UCL_VS_dataset/dummy_data_30pid.csv
-Transformed tests/fixtures/IDP_UCL_VS_dataset/dummy_data_30pid.csv into META
+$ g3t_etl transform tests/fixtures/sample_dataset/dummy_data_30pid.csv
+Transformed tests/fixtures/sample_dataset/dummy_data_30pid.csv into META
 
 $ g3t utilities meta validate
 templates:
@@ -146,7 +146,7 @@ See [dummy file generation](tests/fixtures/sample_dataset-files/README.md).
 ###### association a file with a specimen
 ```shell
 # find all specimen identifiers, and add the file to the index in parallel
-$ cat META/Specimen.ndjson | jq -r '.identifier[0].value' | xargs -P 8 -L 1 -I SPECIMEN g3t add --specimen SPECIMEN tests/fixtures/IDP_UCL_VS_dataset-files/dummy_data_30pid/SPECIMEN_mri_guided_prostate_biopsy.jpeg
+$ cat META/Specimen.ndjson | jq -r '.identifier[0].value' | xargs -P 8 -L 1 -I SPECIMEN g3t add --specimen SPECIMEN tests/fixtures/sample_dataset-files/dummy_data_30pid/SPECIMEN_mri_guided_prostate_biopsy.jpeg
 # create metadata for the files
 $ g3t utilities meta create
 ```
@@ -179,7 +179,7 @@ remote:
 ```
 
 
-Loading the tests/fixtures/IDP_UCL_VS_dataset/dummy_data_30pid.csv metadata into a test instance produces the following:
+Loading the tests/fixtures/sample_dataset/dummy_data_30pid.csv metadata into a test instance produces the following:
 
 ![](docs/patient-explorer.png)
 ![](docs/observation-explorer.png)
