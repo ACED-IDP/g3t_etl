@@ -9,7 +9,7 @@ Thank you for considering contributing to our Python project! By contributing, y
 2. **Clone the Repository:** Clone the forked repository to your local machine using the following command:
 
 ```bash
-git clone https://github.com/ACED-IDP/ucl-stavrinides
+git clone https://github.com/ACED-IDP/g3t_etl
 python3 -m venv venv ; source venv/bin/activate
 pip install -r requirements.txt
 pip install -r requirements-dev.txt
