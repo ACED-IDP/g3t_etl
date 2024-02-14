@@ -1,0 +1,10 @@
+gen3:
+  profile: local
+  project_id: test-sample_transformer
+  version: null
+log:
+  format: '[%(asctime)s] [%(levelname)s] %(name)s %(message)s'
+  level: INFO
+output:
+  format: yaml
+state_dir: .g3t/state
