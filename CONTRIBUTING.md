@@ -43,12 +43,16 @@ The Submitter creates the dictionary via a [spreadsheet](https://github.com/ACED
 
 The Submitter uses the `g3t_etl dictionary` and `datamodel-code-generator` utility to create their `Submission` mapping class.
 
+The Submitter adjusts the template files for their use case.
+
 The Submitter creates a Transformer class that:
 * inherits from `Submission`
 * implements `transform(ResearchStudy) -> list[Resources]`
 * implements `register()` which callbacks `factory.register(transformer, dictionary_path)`
 
 The Submitter uses the `g3t_etl transform` command to read tabular data and create ndjson files in `META/`
+
+The Submitter uses `g3t utilities meta validate` to validate the ndjson files.
 
 The Submitter uses the `g3t` commands to commit and push changes to the server
 
