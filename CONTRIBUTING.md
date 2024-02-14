@@ -27,6 +27,31 @@ endpoint: https://aced-idp.org
 username: your-email@institution.edu
 ```
 
+### Overview
+
+* The `g3t_etl` project provides features to manage a submission data dictionary, read tabular data, and create and validate FHIR resources.
+
+* The `Submitter` maintains a single plugin class that makes decisions on a record by record basis on what FHIR resources are created.
+
+<img width="706" alt="image" src="https://github.com/ACED-IDP/g3t_etl/assets/47808/de39bb59-af53-4e23-a68b-f1b37fe38732">
+
+<img width="1046" alt="image" src="https://github.com/ACED-IDP/g3t_etl/assets/47808/a0aef7a0-05f2-461f-b766-1cce2bf5c862">
+
+### Narrative
+
+The Submitter creates the dictionary via a [spreadsheet](https://github.com/ACED-IDP/g3t_etl/blob/feature/initial/user-guide.md#dictionary)
+
+The Submitter uses the `g3t_etl dictionary` and `datamodel-code-generator` utility to create their `Submission` mapping class.
+
+The Submitter creates a Transformer class that:
+* inherits from `Submission`
+* implements `transform(ResearchStudy) -> list[Resources]`
+* implements `register()` which callbacks `factory.register(transformer, dictionary_path)`
+
+The Submitter uses the `g3t_etl transform` command to read tabular data and create ndjson files in `META/`
+
+The Submitter uses the `g3t` commands to commit and push changes to the server
+
 
 ### Making Changes
 
