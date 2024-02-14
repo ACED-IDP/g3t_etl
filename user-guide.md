@@ -141,7 +141,7 @@ $ g3t push
 
 ##### Adding dummy image files
 
-See [dummy file generation](tests/fixtures/IDP_UCL_VS_dataset-files/README.md).
+See [dummy file generation](tests/fixtures/sample_dataset-files/README.md).
 
 ###### association a file with a specimen
 ```shell
