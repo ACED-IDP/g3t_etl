@@ -1,0 +1,18 @@
+# testing
+pytest
+pytest-cov
+# syntax check
+flake8
+# syntax enforcer
+black
+# pypi
+twine
+# packaging
+wheel
+setuptools
+# project hygene
+pre-commit
+# code generation
+datamodel-code-generator
+# see https://github.com/psf/black/issues/3111#issuecomment-1177362541
+# click>=8.0,<=8.0.4
