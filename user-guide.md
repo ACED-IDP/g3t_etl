@@ -111,6 +111,16 @@ and submission.schema.json is the master data dictionary.
 
 #### Example:
 
+##### Install your Transformer package
+```shell
+export PYTHONPATH=sample_transformer:$PYTHONPATH
+export G3T_PLUGIN=sample_transformer.transformer
+g3t_etl transform
+>>> Loaded sample_transformer.transformer
+
+
+```
+
 ##### Transforming a csv file to FHIR
 
 ```bash

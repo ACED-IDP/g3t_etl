@@ -14,7 +14,7 @@ from importlib.metadata import version as pkg_version
 
 @click.group(invoke_without_command=True)
 @click.option('--version', is_flag=True, help="Show version")
-@click.option('--plugin', help="python module of transformer", envvar="G3T_PLUGIN")
+@click.option('--plugin', help="python module of transformer env:G3T_PLUGIN", envvar="G3T_PLUGIN")
 @click.pass_context
 def cli(ctx, version, plugin):
     """Create ACED metadata submissions."""
@@ -32,7 +32,7 @@ def cli(ctx, version, plugin):
         load_plugins([plugin])
         click.secho(f"Loaded {plugin}", fg="green", file=sys.stderr)
     else:
-        click.secho("No plugin loaded")
+        click.secho("No plugin loaded", fg="yellow", file=sys.stderr)
 
 
 @cli.command('transform')
