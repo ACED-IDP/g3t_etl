@@ -33,8 +33,7 @@ username: your-email@institution.edu
 
 * The `Submitter` maintains a single plugin class that makes decisions on a record by record basis on what FHIR resources are created.
 
-![image](https://github.com/ACED-IDP/g3t_etl/assets/47808/a3ba0ef4-ebcb-4082-ab73-ab4495df4d47)
-
+<img width="706" alt="image" src="https://github.com/ACED-IDP/g3t_etl/assets/47808/de39bb59-af53-4e23-a68b-f1b37fe38732">
 
 <img width="1046" alt="image" src="https://github.com/ACED-IDP/g3t_etl/assets/47808/a0aef7a0-05f2-461f-b766-1cce2bf5c862">
 

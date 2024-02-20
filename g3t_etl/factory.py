@@ -98,8 +98,11 @@ def transform_csv(input_path: pathlib.Path,
 
     emitters = {}
 
-    df = pandas.read_csv(input_path)
+    # clean up the data: remove leading/trailing spaces, replace NaN with None
+    df = pandas.read_csv(input_path, skipinitialspace=True, skip_blank_lines=True, comment="#")
+    df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
     df = df.replace({np.nan: None})
+
     records = df.to_dict(orient='records')
 
     parsed_count = 0
