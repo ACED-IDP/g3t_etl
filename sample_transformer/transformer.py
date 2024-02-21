@@ -4,11 +4,9 @@ import sys
 from typing import Any, Optional
 
 from fhir.resources.patient import Patient
-from fhir.resources.procedure import Procedure
 from fhir.resources.researchstudy import ResearchStudy
 from fhir.resources.researchsubject import ResearchSubject
 from fhir.resources.resource import Resource
-from fhir.resources.specimen import Specimen
 from pydantic import BaseModel, computed_field
 
 from g3t_etl import factory
@@ -29,7 +27,7 @@ class DeconstructedID(BaseModel):
 def split_id(id_str) -> None | DeconstructedID:
     """Format: XXX_Y_Z_H, where:
     XXX is patient ID,
-    Y is the MRI area number,
+    Y is the MRI area number lesion,
     Z are the time points (A or B), which may occur multiple times,
     H is the tissue block number in case of multiple biopsy blocks per area"""
 
@@ -101,45 +99,54 @@ class SimpleTransformer(Submission, FHIRTransformer):
             if deconstructed_id.tissue_block:
                 lesion_identifier += f"_{deconstructed_id.tissue_block}"
 
-            identifier = self.populate_identifier(value=f"{deconstructed_id.patient_id}/{lesion_identifier}")
-            procedure = Procedure(id=self.mint_id(identifier=identifier, resource_type='Procedure'),
-                                  identifier=[identifier],
-                                  status="completed",
-                                  subject=self.to_reference(patient))
-            procedure.code = self.populate_codeable_concept(system="http://snomed.info/sct", code="312250003",
-                                                            display="Magnetic resonance imaging")
-
-            exception_msg_part = 'Specimen'
-            identifier = self.populate_identifier(value=f"{self.id}")
-            specimen = Specimen(id=self.mint_id(identifier=identifier, resource_type='Specimen'),
-                                identifier=[identifier],
-                                collection={'procedure': self.to_reference(procedure)},
-                                subject=self.to_reference(patient))
-
             exception_msg_part = 'Condition'
             condition = self.template_condition(subject=self.to_reference(patient))
-            identifier = self.populate_identifier(value=f"{deconstructed_id.patient_id}/{condition.code.text}")
+            identifier = self.populate_identifier(value=f"{deconstructed_id.patient_id}/{condition.code.text}/{self.ageDiagM}")
             condition.id = self.mint_id(identifier=identifier, resource_type='Condition')
             condition.identifier = [identifier]
             condition.onsetAge = self.to_quantity(field="ageDiagM", field_info=self.model_fields['ageDiagM'])
 
-            # TODO confirm these fields as Observations of the Specimen
-            specimen_observations = self.create_observations(subject=patient, focus=specimen)
-            condition_observations = self.create_observations(subject=patient, focus=condition)
+            occurrence_age = self.ageDiagM + self.months_diag
+            occurrence_age = self.to_quantity(value=occurrence_age, field_info=self.model_fields['ageDiagM'])
+
+            procedure = self.template_procedure(subject=self.to_reference(patient))
+            identifier = self.populate_identifier(value=f"{deconstructed_id.patient_id}/{lesion_identifier}/{occurrence_age['value']}")
+            procedure.id = self.mint_id(identifier=identifier, resource_type='Procedure')
+            procedure.identifier = [identifier]
+            procedure.occurrenceAge = occurrence_age
+            procedure.reason = [self.to_codeable_reference(resource=condition)]
+
+            if self.deconstructed_id.tissue_block:
+                procedure.code = self.populate_codeable_concept(system="http://snomed.info/sct", code="81068001",
+                                                                display="Fine needle aspiration biopsy of prostate")
+            else:
+                procedure.code = self.populate_codeable_concept(system="http://snomed.info/sct", code="312250003",
+                                                                display="Magnetic resonance imaging")
+
+            specimen = None
+            # exception_msg_part = 'Specimen'
+            # identifier = self.populate_identifier(value=f"{self.id}")
+            # specimen = Specimen(id=self.mint_id(identifier=identifier, resource_type='Specimen'),
+            #                     identifier=[identifier],
+            #                     collection={'procedure': self.to_reference(procedure)},
+            #                     subject=self.to_reference(patient))
+
+            # TODO confirm these fields as Observations of the Procedure
+            procedure_observations = self.create_observations(subject=patient, focus=procedure)
 
         except Exception as e:
             print(f"Error transforming {self.id} to {exception_msg_part}: {e}", file=sys.stderr)
             raise e
 
-        patient_graph = [patient, specimen, procedure, condition]
+        patient_graph = [_ for _ in [patient, specimen, procedure, condition] if _]
         if research_study and research_subject:
             patient_graph.append(research_subject)
 
-        return patient_graph + specimen_observations + condition_observations
+        return patient_graph + procedure_observations
 
 
 def register() -> None:
     factory.register(
         transformer=SimpleTransformer,
-        dictionary_path="tests/fixtures/sample_data_dictionary.xlsx"
+        dictionary_path="tests/fixtures/sample_data_dictionary.xlsx",
     )
