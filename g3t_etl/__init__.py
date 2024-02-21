@@ -168,6 +168,9 @@ def aggregate(metadata_path: pathlib.Path | str) -> dict:
 
             refs = nested_lookup('reference', _)
             for ref in refs:
+                # A codeable reference is an object with a codeable concept and a reference
+                if isinstance(ref, dict):
+                    ref = ref['reference']
                 ref_resource_type = ref.split('/')[0]
                 if 'references' not in summary[resource_type]:
                     summary[resource_type]['references'] = nested_dict()
