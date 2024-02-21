@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import Callable, TextIO, Optional, Any
 
 from fhir.resources.codeableconcept import CodeableConcept
+from fhir.resources.codeablereference import CodeableReference
 from fhir.resources.identifier import Identifier
 from fhir.resources.reference import Reference
 from fhir.resources.resource import Resource
@@ -97,6 +98,19 @@ class TransformerHelper(IdMinter):
     def to_reference(cls, resource: Resource) -> Reference:
         """Create a reference from a resource of the form RESOURCE/id."""
         return Reference(reference=f"{resource.resource_type}/{resource.id}")
+
+    @classmethod
+    def to_codeable_reference(cls, resource: Resource = None, concept: CodeableConcept = None) -> Reference:
+        """Create a reference from a resource of the form RESOURCE/id."""
+        _ = CodeableReference()
+        if resource:
+            _.reference = Reference(reference=f"{resource.resource_type}/{resource.id}")
+        if concept:
+            _.concept = concept
+        assert _ and (_.reference or _.concept), f"Could not create CodeableReference from {resource} and {concept}"
+        return _
+
+
 
     def populate_codeable_concept(self, code: str, display: str, system: str = None, text: str = None) -> CodeableConcept:
         """Populate a FHIR CodeableConcept."""

@@ -1,4 +1,4 @@
-"""Factory for creating a game character."""
+"""Factory for creating a transformer."""
 import logging
 import pathlib
 from typing import Any, Callable
@@ -8,9 +8,11 @@ from typing import Protocol
 import numpy as np
 import pandas
 import yaml
+from fhir.resources.codeablereference import CodeableReference
 from fhir.resources.condition import Condition
 from fhir.resources.identifier import Identifier
 from fhir.resources.observation import Observation
+from fhir.resources.procedure import Procedure
 from fhir.resources.reference import Reference
 from fhir.resources.researchstudy import ResearchStudy
 from fhir.resources.resource import Resource
@@ -31,6 +33,9 @@ with open("templates/Condition.yaml") as fp:
 
 with open("templates/Observation.yaml") as fp:
     OBSERVATION = yaml.safe_load(fp)
+
+with open("templates/Procedure.yaml") as fp:
+    PROCEDURE = yaml.safe_load(fp)
 
 
 _project_id = 'unknown-unknown'
@@ -76,6 +81,12 @@ def template_condition(subject: Reference) -> Condition:
     """Create a generic prostate cancer condition."""
     CONDITION['subject'] = subject
     return Condition(**CONDITION)
+
+
+def template_procedure(subject: Reference) -> Procedure:
+    """Create a generic procedure."""
+    PROCEDURE['subject'] = subject
+    return Procedure(**PROCEDURE)
 
 
 class TransformationResults(BaseModel):
@@ -229,7 +240,7 @@ class FHIRTransformer(ABC):
             if 'int' in field_type:
                 observation.valueInteger = getattr(self, field)
             elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
-                observation.valueQuantity = self.to_quantity(field, field_info)
+                observation.valueQuantity = self.to_quantity(field=field, field_info=field_info)
             else:
                 observation.valueString = getattr(self, field)
 
@@ -237,10 +248,13 @@ class FHIRTransformer(ABC):
 
         return observations
 
-    def to_quantity(self, field, field_info) -> dict:
+    def to_quantity(self, field_info: FieldInfo, field=None, value=None) -> dict:
         """Convert to FHIR Quantity."""
+        if not value:
+            value = getattr(self, field)
+
         _ = {
-            "value": getattr(self, field),
+            "value": value,
         }
         if field_info.json_schema_extra:
             if 'uom_system' in field_info.json_schema_extra:
@@ -264,6 +278,11 @@ class FHIRTransformer(ABC):
         # dispatch to helper
         return self._helper.to_reference(*args, **kwargs)
 
+    def to_codeable_reference(self, *args: Any, **kwargs: Any) -> CodeableReference:
+        """Create a reference from a resource of the form RESOURCE/id."""
+        # dispatch to helper
+        return self._helper.to_codeable_reference(*args, **kwargs)
+
     def populate_codeable_concept(self, *args: Any, **kwargs: Any) -> dict:
         """Populate a FHIR CodeableConcept."""
         # dispatch to helper
@@ -274,3 +293,9 @@ class FHIRTransformer(ABC):
         """Create a generic prostate cancer condition."""
         # dispatch to helper
         return template_condition(*args, **kwargs)
+
+    @classmethod
+    def template_procedure(cls, *args: Any, **kwargs: Any) -> Procedure:
+        """Create a generic prostate cancer condition."""
+        # dispatch to helper
+        return template_procedure(*args, **kwargs)
