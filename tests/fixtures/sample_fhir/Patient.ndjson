@@ -1,0 +1,2 @@
+{"resourceType":"Patient","id":"434258c9-8a26-5d92-bdab-ae9631096d58","identifier":[{"use":"official","system":"https://aced-idp.org/test-sample_transformer","value":"123"}],"active":true}
+{"resourceType":"Patient","id":"c377f672-45d3-5075-b23a-3a515565b4a8","identifier":[{"use":"official","system":"https://aced-idp.org/test-sample_transformer","value":"124"}],"active":true}

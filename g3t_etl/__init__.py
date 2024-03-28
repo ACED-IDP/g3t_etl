@@ -110,8 +110,6 @@ class TransformerHelper(IdMinter):
         assert _ and (_.reference or _.concept), f"Could not create CodeableReference from {resource} and {concept}"
         return _
 
-
-
     def populate_codeable_concept(self, code: str, display: str, system: str = None, text: str = None) -> CodeableConcept:
         """Populate a FHIR CodeableConcept."""
         if not text:

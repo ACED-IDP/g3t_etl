@@ -1,7 +1,8 @@
 """Factory for creating a transformer."""
 import logging
 import pathlib
-from typing import Any, Callable
+from collections import defaultdict
+from typing import Any, Callable, ClassVar, NamedTuple
 
 from typing import Protocol
 
@@ -10,12 +11,15 @@ import pandas
 import yaml
 from fhir.resources.codeablereference import CodeableReference
 from fhir.resources.condition import Condition
+from fhir.resources.fhirtypes import CodeableConceptType
 from fhir.resources.identifier import Identifier
 from fhir.resources.observation import Observation
+from fhir.resources.patient import Patient
 from fhir.resources.procedure import Procedure
 from fhir.resources.reference import Reference
 from fhir.resources.researchstudy import ResearchStudy
 from fhir.resources.resource import Resource
+from fhir.resources.specimen import Specimen
 from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.fields import FieldInfo
 from abc import ABC, abstractmethod
@@ -36,6 +40,12 @@ with open("templates/Observation.yaml") as fp:
 
 with open("templates/Procedure.yaml") as fp:
     PROCEDURE = yaml.safe_load(fp)
+
+with open("templates/Specimen.yaml") as fp:
+    SPECIMEN = yaml.safe_load(fp)
+
+with open("templates/Patient.yaml") as fp:
+    PATIENT = yaml.safe_load(fp)
 
 
 _project_id = 'unknown-unknown'
@@ -89,6 +99,17 @@ def template_procedure(subject: Reference) -> Procedure:
     return Procedure(**PROCEDURE)
 
 
+def template_specimen(subject: Reference) -> Procedure:
+    """Create a generic specimen."""
+    SPECIMEN['subject'] = subject
+    return Specimen(**SPECIMEN)
+
+
+def template_patient() -> Patient:
+    """Create a generic patient."""
+    return Patient(**PATIENT)
+
+
 class TransformationResults(BaseModel):
     """Summarize the transformation results."""
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -110,7 +131,7 @@ def transform_csv(input_path: pathlib.Path,
     emitters = {}
 
     # clean up the data: remove leading/trailing spaces, replace NaN with None
-    df = pandas.read_csv(input_path, skipinitialspace=True, skip_blank_lines=True, comment="#")
+    df = pandas.read_csv(input_path, skipinitialspace=True, skip_blank_lines=True, comment="#", dtype=str)
     df = df.map(lambda x: x.strip() if isinstance(x, str) else x)
     df = df.replace({np.nan: None})
 
@@ -174,7 +195,7 @@ def transform_csv(input_path: pathlib.Path,
 def additional_observation_codings(field_info: FieldInfo) -> list[dict]:
     """Additional codings for the observation."""
 
-    if 'code' in field_info.json_schema_extra:
+    if 'coding_code' in field_info.json_schema_extra:
         return [{
             "system": field_info.json_schema_extra['coding_system'],
             "code": field_info.json_schema_extra['coding_code'],
@@ -183,17 +204,199 @@ def additional_observation_codings(field_info: FieldInfo) -> list[dict]:
     return []
 
 
+class FieldMappingInstance(NamedTuple):
+    """Field name, info and value"""
+    field: str
+    field_info: FieldInfo
+    value: Any
+
+
 class FHIRTransformer(ABC):
     """Abstract helper class, implementers can combine with a BaseModel of their submission."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    """Allow arbitrary types. e.g. dicts"""
+
+    _logged_already: ClassVar[list] = []
+    """Class variable to log mappings once."""
+    _mapped_fields: dict[str, FieldInfo] = {}
+    """Fields that have been mapped to FHIR resources."""
+    _unmapped_fields: dict[str, FieldInfo] = {}
+    """Fields that have not been mapped to FHIR resources."""
+    _resource_mapping: dict[str, dict[str, FieldMappingInstance]] = {}
+    """mapped fields by resource_type."""
+    _observation_mapping: list[FieldMappingInstance] = []
+    """mapped associations for observations."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize, save passed helper."""
         self._helper = kwargs['helper']
+        self._mapped_fields = {k: v for k, v in self.model_fields.items() if
+                               v.json_schema_extra and 'fhir_resource_type' in v.json_schema_extra}
+        self._unmapped_fields = {k: v for k, v in self.model_fields.items() if
+                                 v.json_schema_extra and 'fhir_resource_type' not in v.json_schema_extra}
+        if 'field_mappings' not in self.logged_already:
+            logger.info(f"Unmapped fields {self._unmapped_fields}")
+            logger.info(f"Mapped fields {self._mapped_fields}")
+            self.logged_already.append('field_mappings')
+
+        self._resource_mapping = defaultdict(dict)
+        self._observation_mapping = []
+        for k, v in self.mapped_fields.items():
+            resource_type = v.json_schema_extra['fhir_resource_type']
+            # only mappings with properties
+            if '.' in resource_type:
+                resource_type, _ = resource_type.split('.', maxsplit=1)
+                self._resource_mapping[resource_type][_] = FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)})
+            elif resource_type == 'Observation':
+                self._observation_mapping.append(FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
+            else:
+                assert False, f"unknown mapping {(k, v)}"
+
+    @property
+    def logged_already(self) -> list:
+        """Class variableReturn the logged already."""
+        return FHIRTransformer._logged_already
+
+    @property
+    def mapped_fields(self) -> dict[str, FieldInfo]:
+        """Return the mapped fields."""
+        return self._mapped_fields
+
+    @property
+    def unmapped_fields(self) -> dict[str, FieldInfo]:
+        """Return the unmapped fields."""
+        return self._unmapped_fields
+
+    @property
+    def observation_mapping(self) -> list[FieldMappingInstance]:
+        """Return the observation mappings."""
+        return self._observation_mapping
 
     @abstractmethod
     def transform(self, research_study: ResearchStudy = None) -> list[Resource]:
         """Implementers must implement this method."""
         pass
+
+    @property
+    def resource_mapping(self) -> dict[str, dict[str, Any]]:
+        """Utility method, create a dict, of mapped properties for each resource_type."""
+        return self._resource_mapping
+
+    def create_patient(self, generated_resources: list[Resource]) -> Patient | None:
+        """Create a patient."""
+        if 'Patient' not in self.resource_mapping:
+            return None
+
+        patient_mapping = self.resource_mapping['Patient']
+        assert 'identifier' in patient_mapping, f"Patient must have an identifier {self}"
+        identifier = self.populate_identifier(value=patient_mapping['identifier'].value)
+        patient = self.template_patient()
+        patient.id = self.mint_id(identifier=identifier, resource_type='Patient')
+        patient.identifier = [identifier]
+
+        for field, info in patient_mapping.items():
+            if field == 'identifier':
+                # already processed this
+                continue
+            setattr(patient, field, info['value'])
+
+        return patient
+
+    def create_specimen(self, patient: Patient | None, generated_resources: list[Resource]) -> Specimen | None:
+        """Create a specimen."""
+        if 'Specimen' not in self.resource_mapping:
+            return None
+
+        specimen_mapping = self.resource_mapping['Specimen']
+        assert 'identifier' in specimen_mapping, f"Specimen must have an identifier {self}"
+        identifier = self.populate_identifier(value=specimen_mapping['identifier'].value)
+        assert patient, f"Patient must be created before Specimen {self}"
+        specimen = self.template_specimen(subject=self.to_reference(patient))
+        specimen.identifier = [identifier]
+        specimen.id = self.mint_id(identifier=identifier, resource_type='Patient')
+        for field, info in specimen_mapping.items():
+            if field == 'identifier':
+                # already processed this
+                continue
+            field_root = field.split('.')[0].split('[')[0]
+            if not hasattr(specimen, field_root):
+                logger.warning(f"Specimen has no field {field} {info['value']}")
+                continue
+            try:
+                value = info.value
+                # TODO - there should be a more elegant way to do this
+                # for now, let's maintain these nested fields manually :-(
+                if 'collection.bodySite' == field:
+                    specimen.collection.bodySite = self.to_codeable_reference(concept=self.populate_codeable_concept(code=value, display=value))
+                    continue
+                if 'processing[0].method' == field:
+                    specimen.processing[0].method = self.populate_codeable_concept(code=value, display=value)
+                    continue
+
+                if specimen.__fields__[field].outer_type_ == CodeableConceptType:
+                    value = self.populate_codeable_concept(code=value, display=value)
+
+                setattr(specimen, field, value)
+
+            except Exception as e:
+                logger.error(f"Error setting field {field} to {info.value}: {e}")
+                raise e
+
+        return specimen
+
+    def create_procedure(self, patient: Patient | None, generated_resources: list[Resource]) -> Procedure | None:
+        """Create a procedure."""
+        if 'Procedure' not in self.resource_mapping:
+            return None
+
+        procedure_mapping = self.resource_mapping['Procedure']
+        assert 'code' in procedure_mapping, f"Procedure must have a code {self}"
+        code = self.populate_codeable_concept(code=procedure_mapping['code'].value, display=procedure_mapping['code'].value)
+        if 'identifier' not in procedure_mapping:
+            if 'procedure_identifier' not in self.logged_already:
+                logger.warning(f"Procedure SHOULD have an identifier {self}, creating from patient identifier")
+                self.logged_already.append('procedure_identifier')
+            identifier = self.populate_identifier(value=patient.identifier[0].value + '/Procedure/' + procedure_mapping['code'].value)
+        else:
+            identifier = self.populate_identifier(value=procedure_mapping['identifier']['value'])
+
+        procedure = self.template_procedure(subject=self.to_reference(patient))
+        procedure.code = code
+        procedure.identifier = [identifier]
+        procedure.id = self.mint_id(identifier=identifier, resource_type='Procedure')
+        return procedure
+
+    def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
+        """Default transformation, call this method if you don't want to implement your own transform."""
+
+        # "process" mapping
+
+        generated_resources: list[Resource] = [research_study]
+
+        patient = self.create_patient(generated_resources)
+        if patient:
+            generated_resources.append(patient)
+
+        specimen = self.create_specimen(patient, generated_resources)
+        if specimen:
+            generated_resources.append(specimen)
+
+        procedure = self.create_procedure(patient, generated_resources)
+        if procedure:
+            generated_resources.append(procedure)
+
+        # "observation" mapping
+        for observation_mapping in self.observation_mapping:
+            if 'observation_subject' in observation_mapping.field_info.json_schema_extra:
+                observation_subject = observation_mapping.field_info.json_schema_extra['observation_subject']
+                for _ in generated_resources:
+                    if _.resource_type == observation_subject:
+                        observations = self.create_observations(subject=patient, focus=_)
+                        if observations:
+                            generated_resources.extend(observations)
+
+        return generated_resources
 
     def create_observations(self, subject, focus) -> list[Observation]:
         """Create observations."""
@@ -224,9 +427,13 @@ class FHIRTransformer(ABC):
 
             if 'code' in OBSERVATION:
                 del OBSERVATION['code']
+            code = field
+            display = field_info.description
+            if not display:
+                display = value
             observation = Observation(
                 **OBSERVATION,
-                code=self.populate_codeable_concept(code=field, display=field_info.description)
+                code=self.populate_codeable_concept(code=code, display=display)
             )
             observation.id = id_
             observation.identifier = [identifier]
@@ -290,12 +497,24 @@ class FHIRTransformer(ABC):
 
     @classmethod
     def template_condition(cls, *args: Any, **kwargs: Any) -> Condition:
-        """Create a generic prostate cancer condition."""
+        """Create a generic condition."""
         # dispatch to helper
         return template_condition(*args, **kwargs)
 
     @classmethod
     def template_procedure(cls, *args: Any, **kwargs: Any) -> Procedure:
-        """Create a generic prostate cancer condition."""
+        """Create a generic procedure."""
         # dispatch to helper
         return template_procedure(*args, **kwargs)
+
+    @classmethod
+    def template_specimen(cls, *args: Any, **kwargs: Any) -> Procedure:
+        """Create a generic specimen."""
+        # dispatch to helper
+        return template_specimen(*args, **kwargs)
+
+    @classmethod
+    def template_patient(cls, *args: Any, **kwargs: Any) -> Procedure:
+        """Create a generic patient."""
+        # dispatch to helper
+        return template_patient(*args, **kwargs)

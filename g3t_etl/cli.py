@@ -1,3 +1,4 @@
+import pathlib
 import sys
 from pathlib import Path
 
@@ -11,8 +12,16 @@ from g3t_etl.submission_dictionary import spreadsheet_json_schema
 from g3t_etl.loader import load_plugins
 from importlib.metadata import version as pkg_version
 
+from g3t_etl.util.local_fhir_db import LocalFHIRDatabase
 
-@click.group(invoke_without_command=True)
+
+class OrderCommands(click.Group):
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        return list(self.commands)
+
+
+@click.group(invoke_without_command=True, cls=OrderCommands)
 @click.option('--version', is_flag=True, help="Show version")
 @click.option('--plugin', help="python module of transformer env:G3T_PLUGIN", envvar="G3T_PLUGIN")
 @click.pass_context
@@ -33,6 +42,49 @@ def cli(ctx, version, plugin):
         click.secho(f"Loaded {plugin}", fg="green", file=sys.stderr)
     else:
         click.secho("No plugin loaded", fg="yellow", file=sys.stderr)
+
+
+@cli.command('dictionary')
+@click.argument('input_path', type=click.Path(), default=None,
+                required=False)
+@click.argument('output_path', type=click.Path(), default='templates/submission.schema.json', required=False)
+@click.option('--verbose', default=False, show_default=True, is_flag=True,
+              help='verbose output')
+def spreadsheet_json_schema_cli(input_path: str, output_path: str, verbose):
+    """Code generation. Create python model class from a dictionary spreadsheet.
+
+    \b
+    Use this command to track changes to the data dictionary.
+    INPUT_PATH: where to read master spreadsheet default: provided by plugin
+    OUTPUT_PATH: where to write per subject csvs default: templates/submission.schema.json
+    """
+    try:
+        if not input_path:
+            input_path = factory.default_dictionary_path
+
+        input_path = Path(input_path)
+        assert input_path.exists(), f"Spreadsheet not found at {input_path},"\
+                                    " please see README in docs/ for instructions."
+        schema = spreadsheet_json_schema(input_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, 'w') as fp:
+            fp.write(orjson.dumps(schema, option=orjson.OPT_INDENT_2).decode())
+
+        click.secho(f"Transformed {input_path} into jsonschema file in {output_path}",
+                    fg='green', file=sys.stderr)
+        transformer_path = '<your_transformer>'
+        if len(factory.transformers) > 0:
+            transformer_path = factory.transformers[0].__module__.split('.')[0]
+
+        cmd = f"datamodel-codegen  --input {output_path} --input-file-type jsonschema  "\
+              f"--output {transformer_path}/submission.py --field-extra-keys json_schema_extra"
+        click.secho("Use this command to generate pydantic model from schema (change paths depending on your environment):", fg='green', file=sys.stderr)
+        print(cmd)
+    except Exception as e:
+        click.secho(f"Error parsing {input_path} into {output_path}: {e}", fg='red')
+        if verbose:
+            raise e
 
 
 @cli.command('transform')
@@ -59,39 +111,29 @@ def transform_csv_cli(input_path: str, output_path: str, verbose: bool):
             click.secho(f"Transformer errors: {transformation_results.transformer_errors}", fg='red')
 
 
-@cli.command('dictionary')
-@click.argument('input_path', type=click.Path(), default=None,
+@cli.command('dataframe')
+@click.argument('input_path',
+                default='META',
+                type=click.Path(exists=True, dir_okay=True),
                 required=False)
-@click.argument('output_path', type=click.Path(), default='templates/submission.schema.json', required=False)
-@click.option('--verbose', default=False, show_default=True, is_flag=True,
+@click.argument('output_path',
+                type=click.Path(dir_okay=False),
+                required=True)
+@click.option('--verbose',
+              default=False,
+              show_default=True, is_flag=True,
               help='verbose output')
-def spreadsheet_json_schema_cli(input_path: str, output_path: str, verbose):
-    """Code generation. Create python model class from a dictionary spreadsheet.
+def extract_cli(input_path: str, output_path: str, verbose: bool):
+    """Create flattened dataframe (experimental).
 
     \b
-    Use this command to track changes to the data dictionary.
-    INPUT_PATH: where to read master spreadsheet default: provided by plugin
-    OUTPUT_PATH: where to write per subject csvs default: templates/submission.schema.json
+    INPUT_PATH: where to read FHIR  default: META/
+    OUTPUT_PATH: where to write db.
     """
-    try:
-        if not input_path:
-            input_path = factory.default_dictionary_path
-        input_path = Path(input_path)
-        assert input_path.exists(), f"Spreadsheet not found at {input_path},"\
-                                    " please see README in docs/ for instructions."
-        schema = spreadsheet_json_schema(input_path)
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, 'w') as fp:
-            fp.write(orjson.dumps(schema, option=orjson.OPT_INDENT_2).decode())
+    db = LocalFHIRDatabase(db_name=pathlib.Path(output_path))
+    db.load_ndjson_from_dir(input_path)
+    click.secho(f"Exported {input_path} into {output_path}", fg='green', file=sys.stderr)
 
-        click.secho(f"Transformed {input_path} into jsonschema file in {output_path}",
-                    fg='green', file=sys.stderr)
-        cmd = f"datamodel-codegen  --input {output_path} --input-file-type jsonschema  "\
-              "--output sample_transformer/submission.py --field-extra-keys json_schema_extra"
-        click.secho("Use this command to generate pydantic model from schema (change paths depending on your environment):", fg='green', file=sys.stderr)
-        print(cmd)
-    except Exception as e:
-        click.secho(f"Error parsing {input_path} into {output_path}: {e}", fg='red')
-        if verbose:
-            raise e
+
+if __name__ == '__main__':
+    cli()

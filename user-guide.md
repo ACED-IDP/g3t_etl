@@ -53,8 +53,10 @@ Usage: g3t_etl dictionary [OPTIONS] [INPUT_PATH] [OUTPUT_PATH]
 #### Example:
 
 ```bash
-Transformed docs/sample_data_dictionary.xlsx into jsonschema file in templates/submission.schema.json
-Use this command to generate pydantic model from schema:
+G3T_PLUGIN=sample_transformer.transformer g3t_etl dictionary
+Loaded sample_transformer.transformer
+Transformed tests/fixtures/sample_data_dictionary.xlsx into jsonschema file in templates/submission.schema.json
+Use this command to generate pydantic model from schema (change paths depending on your environment):
 datamodel-codegen  --input templates/submission.schema.json --input-file-type jsonschema  --output sample_transformer/submission.py --field-extra-keys json_schema_extra
 ```
 
