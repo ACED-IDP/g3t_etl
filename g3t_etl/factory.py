@@ -18,6 +18,7 @@ from fhir.resources.patient import Patient
 from fhir.resources.procedure import Procedure
 from fhir.resources.reference import Reference
 from fhir.resources.researchstudy import ResearchStudy
+from fhir.resources.researchsubject import ResearchSubject
 from fhir.resources.resource import Resource
 from fhir.resources.specimen import Specimen
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -367,6 +368,18 @@ class FHIRTransformer(ABC):
         procedure.id = self.mint_id(identifier=identifier, resource_type='Procedure')
         return procedure
 
+    def create_research_subject(self, patient: Patient, research_study: ResearchStudy) -> ResearchSubject:
+        """Create research subject."""
+        identifier = self.populate_identifier(value=patient.identifier[0].value + '/ResearchSubject')
+        research_subject = ResearchSubject(
+            id=self.mint_id(identifier=identifier, resource_type='ResearchSubject'),
+            identifier=[identifier],
+            status="active",
+            study={'reference': f"ResearchStudy/{research_study.id}"},
+            subject={'reference': f"Patient/{patient.id}"}
+        )
+        return research_subject
+
     def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
         """Default transformation, call this method if you don't want to implement your own transform."""
 
@@ -376,7 +389,8 @@ class FHIRTransformer(ABC):
 
         patient = self.create_patient(generated_resources)
         if patient:
-            generated_resources.append(patient)
+            research_subject = self.create_research_subject(patient, research_study)
+            generated_resources.extend([patient, research_subject])
 
         specimen = self.create_specimen(patient, generated_resources)
         if specimen:
