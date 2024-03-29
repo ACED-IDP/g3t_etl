@@ -9,7 +9,7 @@
       "type": "string",
       "description": "Patient ID",
       "json_schema_extra": {
-        "fhir_resource_type": "Patient, Specimen, Condition"
+        "fhir_resource_type": "Patient.identifier"
       }
     },
     "align": {
