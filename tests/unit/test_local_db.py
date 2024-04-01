@@ -135,12 +135,12 @@ def loaded_db(db, ndjson_dir):
 
 @pytest.fixture
 def expected_count():
-    return 7457
+    return 7517
 
 
 @pytest.fixture
 def patient_expected_resource_count():
-    return 185
+    return 187
 
 
 @pytest.fixture
@@ -192,10 +192,10 @@ def test_procedure_everything(loaded_db, procedure_expected_resource_count):
     (resource, ) = loaded_db.connection.cursor().execute("SELECT resource FROM procedure_everything").fetchone()
     assert resource is not None, "No data loaded into procedure_everything."
     resource = json.loads(resource)
-    assert 'id' in resource, "No id in resource"
-    assert 'code' in resource, "No code in resource"
-    assert 'gleason' in resource.keys(), "No gleason in resource"
-    assert 'reason' in resource.keys(), "No reason in resource"
+    assert 'id' in resource, "No id in procedure"
+    assert 'code' in resource, "No code in procedure"
+    assert 'gleason' in resource.keys(), "No gleason in procedure"
+    assert 'reason' in resource.keys(), "No reason in procedure"
     # from pprint import pprint
     # pprint(resource)
     # assert isinstance(resource['reason'], str), f"reason is not a string {resource['reason']}"

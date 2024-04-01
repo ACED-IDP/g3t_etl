@@ -1,5 +1,5 @@
 # This file contains the condition resource for all patients
-# Currently, the condition is hardcoded to be a malignant tumor of the prostate, only subject.reference is dynamic
+# Currently, the condition is hardcoded to be a malignant tumor of the prostate, subject.reference and onsetAge are dynamic
 # but this MAY be updated to be more dynamic in the future.
 ---
 resourceType: Condition
@@ -38,5 +38,8 @@ bodySite:
     code: '41216001'
     display: Prostatic structure (body structure)
   text: Prostatic structure (body structure)
-subject:
-  # This is the only dynamic field in this resource
+onsetAge:
+    value: {{ transformer.ageDiagM }}
+    unit: month
+    system: http://unitsofmeasure.org
+    code: mo
