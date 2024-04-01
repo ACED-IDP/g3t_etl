@@ -349,7 +349,7 @@ class FHIRTransformer(ABC):
             try:
                 value = info.value
                 # TODO - there should be a more elegant way to do this
-                # for now, let's maintain these nested fields manually :-(
+                # TODO for now, let's maintain these nested fields manually :-(  - need to use templates
                 if 'collection.bodySite' == field:
                     specimen.collection.bodySite = self.to_codeable_reference(concept=self.populate_codeable_concept(code=value, display=value))
                     continue
@@ -589,7 +589,6 @@ class FHIRTransformer(ABC):
         # dispatch to jinja
         template = JINJA_ENV.get_template("Condition.yaml.jinja")
         _ = template.render(**{'transformer': self})
-        print(_)
         condition_dict = yaml.safe_load(_)
         return Condition(**condition_dict, subject=self.to_reference(subject))
 
