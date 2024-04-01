@@ -1,9 +1,9 @@
 """Factory for creating a transformer."""
 import logging
 import pathlib
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Any, Callable, ClassVar, NamedTuple
-
 from typing import Protocol
 
 import numpy as np
@@ -21,9 +21,9 @@ from fhir.resources.researchstudy import ResearchStudy
 from fhir.resources.researchsubject import ResearchSubject
 from fhir.resources.resource import Resource
 from fhir.resources.specimen import Specimen
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel, ConfigDict, ValidationError
 from pydantic.fields import FieldInfo
-from abc import ABC, abstractmethod
 
 from g3t_etl import TransformerHelper, get_emitter, print_transformation_error, print_validation_error, close_emitters
 
@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 with open("templates/ResearchStudy.yaml") as fp:
     RESEARCH_STUDY = yaml.safe_load(fp)
 
-with open("templates/Condition.yaml") as fp:
-    CONDITION = yaml.safe_load(fp)
+# with open("templates/Condition.yaml.jinja") as fp:
+#     CONDITION = yaml.safe_load(fp)
 
 with open("templates/Observation.yaml") as fp:
     OBSERVATION = yaml.safe_load(fp)
@@ -48,6 +48,8 @@ with open("templates/Specimen.yaml") as fp:
 with open("templates/Patient.yaml") as fp:
     PATIENT = yaml.safe_load(fp)
 
+
+JINJA_ENV = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape())
 
 _project_id = 'unknown-unknown'
 if pathlib.Path('.g3t/config.yaml').exists():
@@ -88,10 +90,10 @@ def unregister(transformer: Callable[..., Transformer]) -> None:
     transformers.remove(transformer)
 
 
-def template_condition(subject: Reference) -> Condition:
-    """Create a generic prostate cancer condition."""
-    CONDITION['subject'] = subject
-    return Condition(**CONDITION)
+# def template_condition(subject: Reference) -> Condition:
+#     """Create a generic prostate cancer condition."""
+#     CONDITION['subject'] = subject
+#     return Condition(**CONDITION)
 
 
 def template_procedure(subject: Reference) -> Procedure:
@@ -158,6 +160,11 @@ def transform_csv(input_path: pathlib.Path,
         print_transformation_error(e, parsed_count, input_path, RESEARCH_STUDY, verbose)
         raise e
 
+    # setup profiling
+    # start = datetime.datetime.now()
+    # pr = cProfile.Profile()
+    # pr.enable()
+
     for record in records:
 
         try:
@@ -182,6 +189,15 @@ def transform_csv(input_path: pathlib.Path,
             transformer_errors.append(e)
             print_transformation_error(e, parsed_count, input_path, record, verbose)
             raise e
+
+        # print profile results
+        # pr.disable()
+        # s = io.StringIO()
+        # ps = pstats.Stats(pr, stream=s).sort_stats(SortKey.CUMULATIVE)
+        # ps.print_stats()
+        # print(s.getvalue())
+        # end = datetime.datetime.now()
+        # print("transform elapsed", end - start)
 
     close_emitters(emitters)
 
@@ -215,7 +231,7 @@ class FieldMappingInstance(NamedTuple):
 class FHIRTransformer(ABC):
     """Abstract helper class, implementers can combine with a BaseModel of their submission."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra='allow')
     """Allow arbitrary types. e.g. dicts"""
 
     _logged_already: ClassVar[list] = []
@@ -232,8 +248,14 @@ class FHIRTransformer(ABC):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize, save passed helper."""
         self._helper = kwargs['helper']
+
         self._mapped_fields = {k: v for k, v in self.model_fields.items() if
                                v.json_schema_extra and 'fhir_resource_type' in v.json_schema_extra}
+
+        for k, v in self.model_computed_fields.items():
+            if v.json_schema_extra and 'fhir_resource_type' in v.json_schema_extra:
+                self._mapped_fields[k] = v
+
         self._unmapped_fields = {k: v for k, v in self.model_fields.items() if
                                  v.json_schema_extra and 'fhir_resource_type' not in v.json_schema_extra}
         if 'field_mappings' not in self.logged_already:
@@ -346,6 +368,49 @@ class FHIRTransformer(ABC):
 
         return specimen
 
+    def create_condition(self, patient: Patient | None, generated_resources: list[Resource]) -> Condition | None:
+        """Create a condition."""
+        if 'Condition' not in self.resource_mapping:
+            return None
+
+        condition_mapping = self.resource_mapping['Condition']
+
+        condition = self.template_condition(subject=patient)
+
+        if len(condition.code.coding) > 0:
+            # loaded from template
+            code = condition.code.coding[0].code
+        else:
+            # loaded from spreadsheet
+            code = condition_mapping['code'].value
+
+        if 'identifier' not in condition_mapping:
+            if 'condition_identifier' not in self.logged_already:
+                logger.warning(f"Condition SHOULD have an identifier {self}, creating from patient identifier")
+                self.logged_already.append('condition_identifier')
+            identifier = self.populate_identifier(value=patient.identifier[0].value + '/Condition/' + code)
+        else:
+            identifier = self.populate_identifier(value=condition_mapping['identifier'].value)
+
+        condition.identifier = [identifier]
+        condition.id = self.mint_id(identifier=identifier, resource_type='Condition')
+
+        # TODO - There is a bit of confusion / duplication here - who is responsible for setting the properties? template, transformer, both?
+        for field, info in condition_mapping.items():
+            if field in ['code', 'identifier']:
+                # already processed these
+                continue
+            if not hasattr(condition, field):
+                # already processed this
+                if f'condition_{field}' not in self.logged_already:
+                    logger.warning(f'"Condition" object has no field "{field}"')
+                    self.logged_already.append(f'condition_{field}')
+
+                continue
+            setattr(condition, field, info.value)
+
+        return condition
+
     def create_procedure(self, patient: Patient | None, generated_resources: list[Resource]) -> Procedure | None:
         """Create a procedure."""
         if 'Procedure' not in self.resource_mapping:
@@ -353,24 +418,34 @@ class FHIRTransformer(ABC):
 
         procedure_mapping = self.resource_mapping['Procedure']
         assert 'code' in procedure_mapping, f"Procedure must have a code {self}"
-        code = self.populate_codeable_concept(code=procedure_mapping['code'].value, display=procedure_mapping['code'].value)
         if 'identifier' not in procedure_mapping:
             if 'procedure_identifier' not in self.logged_already:
                 logger.warning(f"Procedure SHOULD have an identifier {self}, creating from patient identifier")
                 self.logged_already.append('procedure_identifier')
             identifier = self.populate_identifier(value=patient.identifier[0].value + '/Procedure/' + procedure_mapping['code'].value)
         else:
-            identifier = self.populate_identifier(value=procedure_mapping['identifier']['value'])
+            identifier = self.populate_identifier(value=procedure_mapping['identifier'].value)
 
         procedure = self.template_procedure(subject=self.to_reference(patient))
-        procedure.code = code
+        procedure.code = procedure_mapping['code'].value
         procedure.identifier = [identifier]
         procedure.id = self.mint_id(identifier=identifier, resource_type='Procedure')
+
+        for field, info in procedure_mapping.items():
+            if field in ['code', 'identifier']:
+                # already processed this
+                continue
+            setattr(procedure, field, info.value)
+
+        for _ in generated_resources:
+            if _.resource_type == 'Condition':
+                procedure.reason = [self.to_codeable_reference(resource=_)]
+                break
         return procedure
 
     def create_research_subject(self, patient: Patient, research_study: ResearchStudy) -> ResearchSubject:
         """Create research subject."""
-        identifier = self.populate_identifier(value=patient.identifier[0].value + '/ResearchSubject')
+        identifier = self.populate_identifier(value=patient.identifier[0].value)
         research_subject = ResearchSubject(
             id=self.mint_id(identifier=identifier, resource_type='ResearchSubject'),
             identifier=[identifier],
@@ -383,7 +458,7 @@ class FHIRTransformer(ABC):
     def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
         """Default transformation, call this method if you don't want to implement your own transform."""
 
-        # "process" mapping
+        # "process" mappings
 
         generated_resources: list[Resource] = [research_study]
 
@@ -396,19 +471,18 @@ class FHIRTransformer(ABC):
         if specimen:
             generated_resources.append(specimen)
 
+        condition = self.create_condition(patient, generated_resources)
+        if condition:
+            generated_resources.append(condition)
+
         procedure = self.create_procedure(patient, generated_resources)
         if procedure:
             generated_resources.append(procedure)
 
-        # "observation" mapping
-        for observation_mapping in self.observation_mapping:
-            if 'observation_subject' in observation_mapping.field_info.json_schema_extra:
-                observation_subject = observation_mapping.field_info.json_schema_extra['observation_subject']
-                for _ in generated_resources:
-                    if _.resource_type == observation_subject:
-                        observations = self.create_observations(subject=patient, focus=_)
-                        if observations:
-                            generated_resources.extend(observations)
+        for _ in generated_resources:
+            observations = self.create_observations(subject=patient, focus=_)
+            if observations:
+                generated_resources.extend(observations)
 
         return generated_resources
 
@@ -416,6 +490,7 @@ class FHIRTransformer(ABC):
         """Create observations."""
         observations = []
 
+        # TODO - we already have self.observation_mapping, so we can use that?
         observation_fields = {}
         for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
             if not field_info.json_schema_extra:
@@ -509,11 +584,14 @@ class FHIRTransformer(ABC):
         # dispatch to helper
         return self._helper.populate_codeable_concept(*args, **kwargs)
 
-    @classmethod
-    def template_condition(cls, *args: Any, **kwargs: Any) -> Condition:
+    def template_condition(self, subject: Patient) -> Condition:
         """Create a generic condition."""
-        # dispatch to helper
-        return template_condition(*args, **kwargs)
+        # dispatch to jinja
+        template = JINJA_ENV.get_template("Condition.yaml.jinja")
+        _ = template.render(**{'transformer': self})
+        print(_)
+        condition_dict = yaml.safe_load(_)
+        return Condition(**condition_dict, subject=self.to_reference(subject))
 
     @classmethod
     def template_procedure(cls, *args: Any, **kwargs: Any) -> Procedure:
