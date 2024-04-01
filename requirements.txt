@@ -7,3 +7,4 @@ PyYAML
 orjson
 ndjson
 inflection
+jinja2
