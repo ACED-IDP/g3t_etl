@@ -123,7 +123,7 @@ class FHIRTransformer(ABC):
         """Initialize, save passed helper."""
 
         # helper is a class that provides utility functions for creating FHIR resources
-        self._helper = kwargs.get('helper', None)
+        self._helper: TransformerHelper = kwargs.get('helper', None)
 
         # template_helper is a class that provides utility functions for creating JINJA templates
         self._template_helper = kwargs.get('template_helper', None)
@@ -268,6 +268,12 @@ class FHIRTransformer(ABC):
                 if 'processing[0].method' == field:
                     specimen.processing[0].method = self.populate_codeable_concept(code=value, display=value)
                     continue
+                if 'parent' == field:
+                    parent_identifier = self.populate_identifier(value=value)
+                    parent_id = self.mint_id(identifier=parent_identifier, resource_type='Specimen')
+                    specimen.parent = [Reference(reference=f"Specimen/{parent_id}")]
+                    continue
+
 
                 if specimen.__fields__[field].outer_type_ == CodeableConceptType:
                     value = self.populate_codeable_concept(code=value, display=value)
@@ -291,6 +297,9 @@ class FHIRTransformer(ABC):
 
         assert 'identifier' in condition_mapping, f"Condition must have an identifier {self}"
         identifier = condition_mapping['identifier'].value
+
+        if 'code' in condition_mapping:
+            condition.code = condition_mapping['code'].value
 
         condition.identifier = [identifier]
         condition.id = self.mint_id(identifier=identifier, resource_type='Condition')
