@@ -7,7 +7,7 @@ import pandas
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from g3t_etl import get_emitter, print_transformation_error, print_validation_error, close_emitters, Transformer
-from g3t_etl.transformer import template_research_study, DEFAULT_HELPER
+from g3t_etl.transformer import DEFAULT_HELPER, TemplateHelper
 
 transformers: list[Callable[..., Transformer]] = []
 default_dictionary_path: None
@@ -64,7 +64,9 @@ def transform_csv(input_path: pathlib.Path,
     transformer_errors = []
 
     try:
-        transformer = default_transformer()(helper=DEFAULT_HELPER)
+        transformer_class = default_transformer()
+        template_helper = TemplateHelper(transformer_class.template_dir())
+        transformer = transformer_class(helper=DEFAULT_HELPER, template_helper=template_helper)
         research_study = transformer.create_research_study()
         already_seen.add(research_study.id)
         get_emitter(emitters, research_study.resource_type, str(output_path), verbose=False).write(research_study.json() + "\n")
@@ -83,7 +85,7 @@ def transform_csv(input_path: pathlib.Path,
     for record in records:
 
         try:
-            transformer = default_transformer()(**record, helper=DEFAULT_HELPER)
+            transformer = transformer_class(**record, helper=DEFAULT_HELPER, template_helper=template_helper)
             parsed_count += 1
         except ValidationError as e:
             validation_errors.append(e)

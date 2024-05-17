@@ -32,26 +32,24 @@ from g3t_etl import TransformerHelper, Transformer
 logger = logging.getLogger(__name__)
 
 
-# with open("templates/ResearchStudy.yaml") as fp:
-#     RESEARCH_STUDY = yaml.safe_load(fp)
-#
-# # with open("templates/Condition.yaml.jinja") as fp:
-# #     CONDITION = yaml.safe_load(fp)
-#
-# with open("templates/Observation.yaml.jinja") as fp:
-#     OBSERVATION = yaml.safe_load(fp)
-#
-# # with open("templates/Procedure.yaml.jinja") as fp:
-# #     PROCEDURE = yaml.safe_load(fp)
-#
-# with open("templates/Specimen.yaml") as fp:
-#     SPECIMEN = yaml.safe_load(fp)
-#
-# with open("templates/Patient.yaml") as fp:
-#     PATIENT = yaml.safe_load(fp)
-#
-#
-# JINJA_ENV = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape())
+class TemplateHelper:
+    """Helper class for templates. Loads default templates and jinja environment."""
+    def __init__(self, template_dir: pathlib.Path):
+        self.template_dir: pathlib.Path = template_dir
+        self.jinja_env: Environment = Environment(loader=FileSystemLoader(self.template_dir), autoescape=select_autoescape())
+        logger.info(f"Loaded {len(self.jinja_env.list_templates())} templates from {self.template_dir}")
+
+    def render_template(self, template_name: str, transformer: 'FHIRTransformer') -> dict:
+        """Render a template, populated with transformer's values."""
+        # load the jinja template
+        template = self.jinja_env.get_template(template_name)
+        assert template, f"Template {template_name} not found in {self.template_dir}"
+
+        # render the template with values from transformer
+        rendered = yaml.safe_load(template.render(**{'transformer': transformer}))
+
+        return rendered
+
 
 _project_id = 'unknown-unknown'
 if pathlib.Path('.g3t/config.yaml').exists():
@@ -83,32 +81,6 @@ def register(transformer: Callable[..., Transformer], dictionary_path: str) -> N
 def unregister(transformer: Callable[..., Transformer]) -> None:
     """Unregister a transformer."""
     transformers.remove(transformer)
-
-
-# def template_condition(subject: Reference) -> Condition:
-#     """Create a generic prostate cancer condition."""
-#     CONDITION['subject'] = subject
-#     return Condition(**CONDITION)
-
-
-def template_research_study() -> ResearchStudy:
-    research_study = ResearchStudy(**RESEARCH_STUDY)
-    identifier = DEFAULT_HELPER.populate_identifier(value=_project_id)
-    id_ = DEFAULT_HELPER.mint_id(identifier=identifier, resource_type='ResearchStudy')
-    research_study.id = id_
-    research_study.identifier = [identifier]
-    return research_study
-
-
-def template_specimen(subject: Reference) -> Procedure:
-    """Create a generic specimen."""
-    SPECIMEN['subject'] = subject
-    return Specimen(**SPECIMEN)
-
-
-def template_patient() -> Patient:
-    """Create a generic patient."""
-    return Patient(**PATIENT)
 
 
 def additional_observation_codings(field_info: FieldInfo) -> list[dict]:
@@ -149,22 +121,33 @@ class FHIRTransformer(ABC):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize, save passed helper."""
+
+        # helper is a class that provides utility functions for creating FHIR resources
         self._helper = kwargs.get('helper', None)
 
+        # template_helper is a class that provides utility functions for creating JINJA templates
+        self._template_helper = kwargs.get('template_helper', None)
+
+        # look into the generated class and find the fields that are mapped to FHIR resources
         self._mapped_fields = {k: v for k, v in self.model_fields.items() if
                                v.json_schema_extra and 'fhir_resource_type' in v.json_schema_extra}
 
+        # see if there are any computed fields that are mapped to FHIR resources
         for k, v in self.model_computed_fields.items():
             if v.json_schema_extra and 'fhir_resource_type' in v.json_schema_extra:
                 self._mapped_fields[k] = v
 
+        # see if there are fields that are not mapped to FHIR resources
         self._unmapped_fields = {k: v for k, v in self.model_fields.items() if
                                  v.json_schema_extra and 'fhir_resource_type' not in v.json_schema_extra}
+
+        # inform the log about the mappings
         if 'field_mappings' not in self.logged_already:
             logger.info(f"Unmapped fields {self._unmapped_fields}")
             logger.info(f"Mapped fields {self._mapped_fields}")
             self.logged_already.append('field_mappings')
 
+        # look for Observation mappings
         self._resource_mapping = defaultdict(dict)
         self._observation_mapping = []
         for k, v in self.mapped_fields.items():
@@ -179,6 +162,27 @@ class FHIRTransformer(ABC):
                 self._observation_mapping.append(FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
             else:
                 assert False, f"unknown mapping {(k, v)}"
+
+    def render_template(self, template_name: str) -> dict:
+        """Render a template, populated with transformer's values."""
+        # dispatch to template_helper
+        return self._template_helper.render_template(template_name, self)
+
+    def template_research_study(self) -> ResearchStudy:
+        """Create a research study from JINA template."""
+        # load the jina template
+        research_study_dict = self.render_template("ResearchStudy.yaml.jinja")
+
+        # create the research study
+        research_study = ResearchStudy(**research_study_dict)
+
+        # enhance attributes
+        identifier = DEFAULT_HELPER.populate_identifier(value=_project_id)
+        id_ = DEFAULT_HELPER.mint_id(identifier=identifier, resource_type='ResearchStudy')
+        research_study.id = id_
+        research_study.identifier = [identifier]
+
+        return research_study
 
     @property
     def logged_already(self) -> list:
@@ -212,7 +216,7 @@ class FHIRTransformer(ABC):
 
     def create_research_study(self) -> ResearchStudy:
         """Create a research study."""
-        return template_research_study()
+        return self.template_research_study()
 
     def create_patient(self, generated_resources: list[Resource]) -> Patient | None:
         """Create a patient."""
@@ -410,16 +414,21 @@ class FHIRTransformer(ABC):
             id_ = self.mint_id(identifier=identifier, resource_type='Observation')
             more_codings = additional_observation_codings(field_info)
 
-            if 'code' in OBSERVATION:
-                del OBSERVATION['code']
             code = field
             display = field_info.description
             if not display:
                 display = value
+
+            observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
+
+            # override the code
+            if 'code' in observation_dict:
+                del observation_dict['code']
             observation = Observation(
-                **OBSERVATION,
+                **observation_dict,
                 code=self.populate_codeable_concept(code=code, display=display)
             )
+
             observation.id = id_
             observation.identifier = [identifier]
             observation.subject = self.to_reference(subject)
@@ -489,38 +498,38 @@ class FHIRTransformer(ABC):
     def template_condition(self, subject: Patient) -> Condition:
         """Create a generic condition."""
         # dispatch to jinja
-        template = JINJA_ENV.get_template("Condition.yaml.jinja")
-        _ = template.render(**{'transformer': self})
-        condition_dict = yaml.safe_load(_)
+        condition_dict = self.render_template("Condition.yaml.jinja")
         return Condition(**condition_dict, subject=self.to_reference(subject))
 
     def template_procedure(self, subject: Patient) -> Procedure:
         """Create a generic procedure."""
-        # dispatch to helper
         # dispatch to jinja
-        template = JINJA_ENV.get_template("Procedure.yaml.jinja")
-        _ = template.render(**{'transformer': self})
-        procedure_dict = yaml.safe_load(_)
+        procedure_dict = self.render_template("Procedure.yaml.jinja")
         return Procedure(**procedure_dict, subject=self.to_reference(subject))
 
-    @classmethod
-    def template_specimen(cls, *args: Any, **kwargs: Any) -> Procedure:
+    def template_specimen(self, *args: Any, **kwargs: Any) -> Specimen:
         """Create a generic specimen."""
-        # dispatch to helper
-        return template_specimen(*args, **kwargs)
+        # dispatch to jinja
+        return Specimen(**self.render_template("Specimen.yaml.jinja"))
+
+    def template_patient(self, *args: Any, **kwargs: Any) -> Patient:
+        """Create a generic patient."""
+        # dispatch to jinja
+        return Patient(**self.render_template("Patient.yaml.jinja"))
 
     @classmethod
-    def template_patient(cls, *args: Any, **kwargs: Any) -> Procedure:
-        """Create a generic patient."""
-        # dispatch to helper
-        return template_patient(*args, **kwargs)
+    def template_dir(cls) -> pathlib.Path:
+        """Return the template dir."""
+        _ = pathlib.Path(os.path.dirname(inspect.getfile(cls)))
+        _ = _ / 'templates'
+        _.parent.mkdir(parents=True, exist_ok=True)
+        return _
 
     @classmethod
     def generate_templates(cls, overwrite: bool = False) -> None:
         """Generate templates."""
-        plugin_path = pathlib.Path(os.path.dirname(inspect.getfile(cls)))
-        target_template_dir = plugin_path / 'templates'
-        target_template_dir.parent.mkdir(parents=True, exist_ok=True)
+        # TODO - should we move this to factory or elsewhere, not really a transformer thing
+        target_template_dir = cls.template_dir()
 
         reference_templates = Environment(loader=PackageLoader('g3t_etl'), autoescape=select_autoescape())
         reference_observation_template = None

@@ -10,6 +10,8 @@ import gen3_tracker.config as g3t_config
 
 def spreadsheet_json_schema(input_path: pathlib.Path, sheet_main: str = 'fhir_mapping') -> dict:
     """Read spreadsheet, create schema."""
+    if isinstance(input_path, str):
+        input_path = pathlib.Path(input_path)
     df = read_excel_worksheet(input_path, sheet_main)
     df = df.replace({np.nan: ""})
     schema = create_jsonschema(df, title=inflection.camelize(input_path.stem))
