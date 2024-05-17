@@ -7,9 +7,11 @@ import shutil
 import sys
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from datetime import datetime
 from typing import Any, Callable, ClassVar, NamedTuple
 
 import click
+import inflection
 import yaml
 from fhir.resources.codeablereference import CodeableReference
 from fhir.resources.condition import Condition
@@ -534,61 +536,114 @@ class FHIRTransformer(ABC):
         _.parent.mkdir(parents=True, exist_ok=True)
         return _
 
-    @classmethod
-    def generate_templates(cls, overwrite: bool = False) -> None:
-        """Generate templates."""
-        # TODO - should we move this to factory or elsewhere, not really a transformer thing
-        target_template_dir = cls.template_dir()
 
-        reference_templates = Environment(loader=PackageLoader('g3t_etl'), autoescape=select_autoescape())
-        reference_observation_template = None
-        for _ in reference_templates.list_templates():
-            src_template_path = pathlib.Path(reference_templates.get_template(_).filename)
-            target_template_path = target_template_dir / src_template_path.name
-            if src_template_path.name == 'Observation.yaml.jinja':
-                reference_observation_template = src_template_path
-            if not overwrite and target_template_path.exists():
-                click.secho(f"Skipping existing {target_template_path} (see --overwrite).", fg='yellow', file=sys.stderr)
-            else:
-                shutil.copy(src_template_path, target_template_path)
-                click.secho(f"Created {target_template_path}", fg='green', file=sys.stderr)
-        transformer = cls()
-        for _ in transformer.observation_mapping:
-            target_template_path = target_template_dir / f"Observation-{_.field}.yaml.jinja"
-            if not overwrite and target_template_path.exists():
-                click.secho(f"Skipping existing {target_template_path} (see --overwrite).", fg='yellow', file=sys.stderr)
-            else:
-                # the annotations are often decorated with Optional, so cast to string and check for the type
-                field_type = str(_.field_info.annotation)
-                value_x = None
-                if 'int' in field_type:
-                    value_x = "valueInteger: {{ " + f"transformer.{_.field}" + " }}"
-                elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
-                    vq = transformer.to_quantity(field=_.field, field_info=_.field_info)
-                    vq['value'] = "{{ " + f"transformer.{_.field}" + " }}"
-                    if 'system' in vq:
-                        value_x = """
-valueQuantity:
-  value: VALUE
-  system: SYSTEM
-  code: CODE
-  unit: UNIT
-                        """.replace('SYSTEM', vq['system']) \
-                            .replace('CODE', vq['code']) \
-                            .replace('UNIT', vq['unit']) \
-                            .replace('VALUE', vq['value']) \
-                            .replace('\n', '', 1)
+def generate_templates(target_template_dir: pathlib.Path, overwrite: bool = False) -> None:
+    """Generate templates."""
 
-                    else:
-                        value_x = """
-valueQuantity:
-  value: VALUE
-                          """.replace('VALUE', vq['value']) \
-                            .replace('\n', '', 1)
-                else:
-                    value_x = "valueString: {{ " + f"transformer.{_.field}" + " }}"
+    reference_templates = Environment(loader=PackageLoader('g3t_etl'), autoescape=select_autoescape())
+    reference_observation_template = None
+    for _ in reference_templates.list_templates():
+        src_template_path = pathlib.Path(reference_templates.get_template(_).filename)
+        assert src_template_path.exists(), f"Template {src_template_path} not found"
+        target_template_path = target_template_dir / src_template_path.name
+        if src_template_path.name == 'Observation.yaml.jinja':
+            reference_observation_template = src_template_path
+        if not overwrite and target_template_path.exists():
+            click.secho(f"Skipping existing {target_template_path} (see --overwrite).", fg='yellow', file=sys.stderr)
+        else:
+            shutil.copy(src_template_path, target_template_path)
+            click.secho(f"Created {target_template_path}", fg='green', file=sys.stderr)
 
-                observation_template = reference_templates.get_template('Observation.yaml.jinja').render(value_x=value_x)
-                with open(target_template_path, 'w') as fp:
-                    fp.write(observation_template)
-                click.secho(f"Created {target_template_path}", fg='green', file=sys.stderr)
+    #  TODO - dynamically generate observation templates by loading the pydantic models
+#     transformer = cls()
+#     for _ in transformer.observation_mapping:
+#         target_template_path = target_template_dir / f"Observation-{_.field}.yaml.jinja"
+#         if not overwrite and target_template_path.exists():
+#             click.secho(f"Skipping existing {target_template_path} (see --overwrite).", fg='yellow', file=sys.stderr)
+#         else:
+#             # the annotations are often decorated with Optional, so cast to string and check for the type
+#             field_type = str(_.field_info.annotation)
+#             value_x = None
+#             if 'int' in field_type:
+#                 value_x = "valueInteger: {{ " + f"transformer.{_.field}" + " }}"
+#             elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
+#                 vq = transformer.to_quantity(field=_.field, field_info=_.field_info)
+#                 vq['value'] = "{{ " + f"transformer.{_.field}" + " }}"
+#                 if 'system' in vq:
+#                     value_x = """
+# valueQuantity:
+# value: VALUE
+# system: SYSTEM
+# code: CODE
+# unit: UNIT
+#                     """.replace('SYSTEM', vq['system']) \
+#                         .replace('CODE', vq['code']) \
+#                         .replace('UNIT', vq['unit']) \
+#                         .replace('VALUE', vq['value']) \
+#                         .replace('\n', '', 1)
+#
+#                 else:
+#                     value_x = """
+# valueQuantity:
+# value: VALUE
+#                       """.replace('VALUE', vq['value']) \
+#                         .replace('\n', '', 1)
+#             else:
+#                 value_x = "valueString: {{ " + f"transformer.{_.field}" + " }}"
+#
+#             observation_template = reference_templates.get_template('Observation.yaml.jinja').render(value_x=value_x)
+#             with open(target_template_path, 'w') as fp:
+#                 fp.write(observation_template)
+#             click.secho(f"Created {target_template_path}", fg='green', file=sys.stderr)
+
+
+TRANSFORMER_TEMPLATE = '''
+import logging
+from typing import Any
+
+from fhir.resources.researchstudy import ResearchStudy
+from fhir.resources.resource import Resource
+from g3t_etl import factory
+from g3t_etl.transformer import FHIRTransformer
+from .SUBMISSION_PATH import SUBMISSION_CLASS
+
+
+logger = logging.getLogger(__name__)
+
+
+class TRANSFORMER_CLASS(SUBMISSION_CLASS, FHIRTransformer):
+    """Generated Transformer class. Generated NOW"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa
+        """Initialize the transformer, initialize the dictionary and the helper class."""
+        SUBMISSION_CLASS.__init__(self, **kwargs, )
+        FHIRTransformer.__init__(self, **kwargs, )
+
+    def transform(self, research_study: ResearchStudy = None) -> list[Resource]:
+        """Plugin manager will call this function to transform the data to FHIR."""
+        # we can do whatever we want here, but for now we'll just return the default transform
+        return self.default_transform(research_study=research_study)
+
+
+def register() -> None:
+    factory.register(
+        transformer=Transformer
+    )
+
+'''
+
+
+def generate_transformer(submission_source_path: pathlib.Path, overwrite: bool = False) -> None:
+    """Generate a transformer."""
+    target_path = submission_source_path.parent / (submission_source_path.stem + '_transformer.py')
+    if not overwrite and target_path.exists():
+        click.secho(f"Skipping existing {target_path} (see --overwrite).", fg='yellow', file=sys.stderr)
+        return
+
+    clazz = TRANSFORMER_TEMPLATE.replace('SUBMISSION_PATH', submission_source_path.stem)
+    clazz = clazz.replace('SUBMISSION_CLASS', inflection.camelize(submission_source_path.stem))
+    clazz = clazz.replace('TRANSFORMER_CLASS', inflection.camelize(target_path.stem))
+    clazz = clazz.replace('NOW', str(datetime.now().isoformat()))
+    with open(target_path, 'w') as fp:
+        fp.write(clazz)
+    click.secho(f"Created: {target_path}", fg='green', file=sys.stderr)

@@ -17,6 +17,7 @@ from g3t_etl.submission_dictionary import spreadsheet_json_schema
 from g3t_etl.loader import load_plugins
 from importlib.metadata import version as pkg_version
 
+from g3t_etl.transformer import generate_templates, generate_transformer
 from g3t_etl.util.local_fhir_db import LocalFHIRDatabase
 
 
@@ -57,7 +58,7 @@ def cli(ctx, version, plugin, debug: bool):
     ctx.obj['debug'] = debug
 
 
-@cli.command('dictionary')
+@cli.command('generate')
 @click.argument('input_path', type=click.Path(), default=None,
                 required=False)
 @click.argument('plugin_path', type=click.Path(), default=None,
@@ -66,8 +67,12 @@ def cli(ctx, version, plugin, debug: bool):
               help='overwrite existing files')
 @click.pass_context
 def spreadsheet_json_schema_cli(ctx, input_path: str, plugin_path: str, overwrite: bool):
-    """Code generation. Create python model class dictionary spreadsheet in <plugin_path>/submission.schema.json, .py.
-
+    """Code generation. Create python resources based on dictionary spreadsheet.
+    \b
+    <plugin_path>/<submission>.schema.json
+    <plugin_path>/<submission>.py
+    <plugin_path>/<submission>_transformer.py
+    <plugin_path>/templates/<Resource>.yaml.jinja2
     \b
     Use this command to track changes to the data dictionary.
     INPUT_PATH: where to read master spreadsheet file
@@ -91,9 +96,9 @@ def spreadsheet_json_schema_cli(ctx, input_path: str, plugin_path: str, overwrit
             plugin_path = ctx.obj.get('plugin_path', None)
 
         plugin_path = Path(plugin_path)
+        plugin_path.mkdir(exist_ok=True, parents=True)
         assert plugin_path.exists(), f"Plugin path not found at {plugin_path},"
         assert plugin_path.is_dir(), f"Plugin path not a directory at {plugin_path},"
-
 
         output_path = plugin_path / (input_path.stem + '.json')
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,8 +122,16 @@ def spreadsheet_json_schema_cli(ctx, input_path: str, plugin_path: str, overwrit
                 click.secho(f"Error running {cmd}: {stderr} {stdout}", fg='red')
             click.secho(f"Created: {submission_source_path}", fg='green', file=sys.stderr)
 
+        # generate default transformers
+        generate_transformer(submission_source_path, overwrite=overwrite)
+
+        # create templates
+        target_template_dir = pathlib.Path(plugin_path) / 'templates'
+        target_template_dir.mkdir(parents=True, exist_ok=True)
+        generate_templates(target_template_dir=target_template_dir, overwrite=overwrite)
+
     except Exception as e:
-        click.secho(f"Error parsing {input_path} into {output_path}: {e}", fg='red')
+        click.secho(f"Error parsing {input_path}: {e}", fg='red')
         print(ctx.obj)
         if ctx.obj.get('debug', False):
             raise e
@@ -129,31 +142,22 @@ def spreadsheet_json_schema_cli(ctx, input_path: str, plugin_path: str, overwrit
               help='verbose output')
 @click.option('--overwrite', default=False, show_default=True, is_flag=True,
               help='overwrite existing files')
+@click.argument('plugin_path', type=click.Path(exists=True), default=None,
+                required=True)
 @click.pass_context
-def generate_templates_cli(ctx, verbose: bool, overwrite: bool):
+def generate_templates_cli(ctx, plugin_path, verbose: bool, overwrite: bool):
     """Code generation. Create templates from submission schema into <plugin_path>/templates.
+    \b
+    PLUGIN_PATH: directory containing plugin
     """
     try:
         #
         # create templates
         #
-        plugin_path = ctx.obj.get('plugin_path', None)
-        # assert plugin_path, "No plugin loaded"
+        target_template_dir = pathlib.Path(plugin_path) / 'templates'
+        target_template_dir.parent.mkdir(parents=True, exist_ok=True)
 
-        # plugin_path = Path(plugin_path)
-        # target_template_dir = plugin_path / 'templates'
-        # target_template_dir.parent.mkdir(parents=True, exist_ok=True)
-        #
-        # reference_templates = Environment(loader=PackageLoader('g3t_etl'), autoescape=select_autoescape())
-        # for _ in reference_templates.list_templates():
-        #     src_template_path = Path(reference_templates.get_template(_).filename)
-        #     target_template_path = target_template_dir / src_template_path.name
-        #     if not overwrite and target_template_path.exists():
-        #         click.secho(f"Skipping {target_template_path}. It already exists. Use --overwrite to force.", fg='yellow', file=sys.stderr)
-        #     else:
-        #         shutil.copy(src_template_path, target_template_path)
-        #         click.secho(f"Created {target_template_path}", fg='green', file=sys.stderr)
-        factory.default_transformer()().generate_templates(overwrite=overwrite)
+        generate_templates(target_template_dir=target_template_dir, overwrite=overwrite)
     except Exception as e:
         click.secho(f"Error generating templates: {e}", fg='red')
         if ctx.obj.get('debug', False):

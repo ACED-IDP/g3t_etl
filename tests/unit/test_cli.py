@@ -13,7 +13,7 @@ def test_cli():
 def test_dictionary_cli():
     """Ensure we can run the cli."""
     runner = CliRunner()
-    result = runner.invoke(cli, 'dictionary --help'.split())
+    result = runner.invoke(cli, 'generate --help'.split())
     assert result.exit_code == 0
 
 
