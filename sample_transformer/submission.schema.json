@@ -1,0 +1,549 @@
+{
+  "$id": "https://aced-idp.org/ucl-stravrinides/submission.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "submission",
+  "type": "object",
+  "description": "Raw tabular data submitted by UCL",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Patient ID",
+      "json_schema_extra": {
+        "csv_type_notes": "See notes"
+      }
+    },
+    "align": {
+      "type": "string",
+      "description": "Aligned lesion",
+      "json_schema_extra": {
+        "csv_type_notes": "Binary",
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Condition"
+      }
+    },
+    "ageDiagM": {
+      "type": "integer",
+      "description": "Age at Diagnosis in Months",
+      "json_schema_extra": {
+        "fhir_resource_type": "Condition.age",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mo",
+        "uom_unit": "month"
+      }
+    },
+    "ageDiagY": {
+      "type": "integer",
+      "description": "Age at Diagnosis in Years",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "https://loinc.org/",
+        "coding_code": "63932-8",
+        "coding_display": "Age at diagnosis",
+        "observation_subject": "Condition",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "/ a",
+        "uom_unit": "/ year"
+      }
+    },
+    "ppsa": {
+      "type": "number",
+      "description": "Presenting PSA at diagnosis",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct/",
+        "coding_code": "63476009",
+        "coding_display": "Prostate specific antigen measurement",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "ng/mL",
+        "uom_unit": "nanograms per milliliter (ng/mL)"
+      }
+    },
+    "BxPreDiag": {
+      "type": "integer",
+      "description": "Biopsy before diagnosis",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "psaBx": {
+      "type": "number",
+      "description": "PSA at Biopsy A or B",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct/",
+        "coding_code": "63476009",
+        "coding_display": "Prostate specific antigen measurement",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "ng/mL",
+        "uom_unit": "nanograms per milliliter (ng/mL)"
+      }
+    },
+    "months.diag": {
+      "type": "integer",
+      "description": "Months that elapsed since prostate cancer diagnosis",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mo",
+        "uom_unit": "month"
+      }
+    },
+    "gleason": {
+      "type": "string",
+      "description": "Gleason grade",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct",
+        "coding_code": 372278000,
+        "coding_display": "Gleason score",
+        "observation_subject": "Procedure"
+      }
+    },
+    "mccl": {
+      "type": "integer",
+      "description": "Maximum Cancer Core Length in mm",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct",
+        "coding_code": "399598003",
+        "coding_display": "Length of core in specimen obtained by needle biopsy",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "millimeter",
+        "uom_unit": "mm"
+      }
+    },
+    "ucl": {
+      "type": "string",
+      "description": "UCL Definition",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "prvol": {
+      "type": "number",
+      "description": "Prostate volume on MRI",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "https://loinc.org/",
+        "coding_code": "15325-4",
+        "coding_display": "Prostate specific Ag/Prostate volume calculated",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mL",
+        "uom_unit": "milliliter"
+      }
+    },
+    "side": {
+      "type": "string",
+      "description": "Sampled area side (Left or Right)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "zone": {
+      "type": "string",
+      "description": "Sampled area zone (Peripheral, Transition, Both)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "loc": {
+      "type": "string",
+      "description": "Sampled area location (Posterior, Anterior or combinations)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "level": {
+      "type": "string",
+      "description": "Sampled area level (Base, Mid-gland, Apex or combinations)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "likert": {
+      "type": "integer",
+      "description": "Likert score of sampled MRI area",
+      "json_schema_extra": {
+        "csv_type_notes": "2024-05-01T00:00:00",
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct/",
+        "coding_code": 273575009,
+        "coding_display": "ikert scale (assessment scale}",
+        "observation_subject": "Procedure"
+      }
+    },
+    "pirads": {
+      "type": "integer",
+      "description": "PI-RADSv2 score of sampled MRI area",
+      "json_schema_extra": {
+        "csv_type_notes": "2024-05-01T00:00:00",
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://dicom.nema.org/resources/ontology/DCM/",
+        "coding_code": "130564",
+        "coding_display": "PI-RADS v2.0",
+        "observation_subject": "Procedure"
+      }
+    },
+    "precise": {
+      "type": "integer",
+      "description": "PRECISE score of sampled MRI area (only for timepoint B)",
+      "json_schema_extra": {
+        "csv_type_notes": "2024-05-01T00:00:00",
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "adcMean": {
+      "type": "number",
+      "description": "Mean apparent diffusion coefficient of sampled MRI area",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct",
+        "coding_code": "46638006",
+        "coding_display": "Diffusion",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "m2/s",
+        "uom_unit": "square meters per second"
+      }
+    },
+    "adcn": {
+      "type": "number",
+      "description": "Mean apparent diffusion coefficient of sampled MRI area (normalised by contralateral benign prostate ADC)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "m2/s",
+        "uom_unit": "square meters per second"
+      }
+    },
+    "adcu": {
+      "type": "number",
+      "description": "Mean apparent diffusion coefficient of sampled MRI area (normalised by urine ADC)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "m2/s",
+        "uom_unit": "square meters per second"
+      }
+    },
+    "focality": {
+      "type": "string",
+      "description": "Lesion focality",
+      "json_schema_extra": {
+        "csv_type_notes": "Binary",
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "best": {
+      "type": "string",
+      "description": "MRI sequence on which lesion is best seen",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct/",
+        "coding_code": "396199003",
+        "coding_display": "Tumour focality",
+        "observation_subject": "Procedure"
+      }
+    },
+    "bestVol": {
+      "type": "number",
+      "description": "Volume of lesion on best sequence (ml)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mL",
+        "uom_unit": "milliliter"
+      }
+    },
+    "t2Vol": {
+      "type": "number",
+      "description": "Lesion volume on T2 (ml)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mL",
+        "uom_unit": "milliliter"
+      }
+    },
+    "Epi_Count": {
+      "type": "integer",
+      "description": "Total number of epithelial cells within all tissue areas on H&E",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct/",
+        "coding_code": "393942000",
+        "coding_display": "Epithelial cell count",
+        "observation_subject": "Procedure"
+      }
+    },
+    "Stroma_Count": {
+      "type": "integer",
+      "description": "Total number of stromal cells within all tissue areas on H&E",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct/",
+        "coding_code": "74765001",
+        "coding_display": "Lymphocyte",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mL",
+        "uom_unit": "milliliter"
+      }
+    },
+    "Lymphocyte_Count": {
+      "type": "integer",
+      "description": "Total number of lymphocytes within all tissue areas on H&E",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct/",
+        "coding_code": "271036002",
+        "coding_display": "Lymphocyte percent differential count",
+        "observation_subject": "Procedure"
+      }
+    },
+    "Lymphocyte_Percentage": {
+      "type": "number",
+      "description": "% of lymphocytes within all tissue areas on H&E",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "Irani_Gscore": {
+      "type": "integer",
+      "description": "Irani score (number of lymphocytes in largest inflammatory cluster)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "Tissue_Area": {
+      "type": "number",
+      "description": "Tissue area (square mm)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Epithelial_Area": {
+      "type": "number",
+      "description": "Epithelial area (square mm)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Stromal_Area": {
+      "type": "number",
+      "description": "Stromal area (square mm)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Inflammatory_Area": {
+      "type": "number",
+      "description": "Inflammation area (square mm)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Epithelial_Area_Percentage": {
+      "type": "number",
+      "description": "% epithelial area (epithelial area fraction)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "Stromal_Area_Percentage": {
+      "type": "number",
+      "description": "% stromal area (stromal area fraction)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "Inflammatory_Area_Percentage": {
+      "type": "number",
+      "description": "% inflammation area (inflammation area fraction)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    },
+    "Epithelial_Stromal_Ratio": {
+      "type": "number",
+      "description": "Epithelial area/Stromal area (square mm)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Lumen_Area": {
+      "type": "number",
+      "description": "Total area detected as lumen within all tissue areas (square mm)",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Lumen_Density": {
+      "type": "number",
+      "description": "Lumen area/tissue area",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Lumen_Density_Gland": {
+      "type": "number",
+      "description": "Lumen area/epithelial area",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Annotated_Cancer_Area": {
+      "type": "number",
+      "description": "Total area of cancer annotated by pathologist",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Normal_Area": {
+      "type": "number",
+      "description": "Area classified as normal by classifier",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "PIN_Area": {
+      "type": "number",
+      "description": "Area classified as PIN by classifier",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Gleason_3_Area": {
+      "type": "number",
+      "description": "Area classified as G3 by classifier",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Gleason_4_Area": {
+      "type": "number",
+      "description": "Area classified as G4 by classifier",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Gleason_5_Area": {
+      "type": "number",
+      "description": "Area classified as G5 or higher by classifier",
+      "json_schema_extra": {
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure",
+        "uom_system": "http://unitsofmeasure.org",
+        "uom_code": "mm2",
+        "uom_unit": "square millimeter"
+      }
+    },
+    "Gleason_Primary": {
+      "type": "integer",
+      "description": "Primary Gleason according to classifier",
+      "json_schema_extra": {
+        "csv_type_notes": "Ordinal",
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct",
+        "coding_code": 372278000,
+        "coding_display": "Gleason score",
+        "observation_subject": "Procedure"
+      }
+    },
+    "Gleason_Secondary": {
+      "type": "integer",
+      "description": "Secondary Gleason according to classifier",
+      "json_schema_extra": {
+        "csv_type_notes": "Ordinal",
+        "fhir_resource_type": "Observation",
+        "coding_system": "http://snomed.info/sct",
+        "coding_code": 372278000,
+        "coding_display": "Gleason score",
+        "observation_subject": "Procedure"
+      }
+    },
+    "Grade_Group": {
+      "type": "integer",
+      "description": "Grade Group according to classifier",
+      "json_schema_extra": {
+        "csv_type_notes": "Ordinal",
+        "fhir_resource_type": "Observation",
+        "observation_subject": "Procedure"
+      }
+    }
+  }
+}
