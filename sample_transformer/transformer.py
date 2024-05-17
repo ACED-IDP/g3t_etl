@@ -52,6 +52,7 @@ def split_id(id_str) -> None | DeconstructedID:
 class SimpleTransformer(Submission, FHIRTransformer):
     """Performs the most simple transformation possible."""
 
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:  # noqa
         """Initialize the transformer, initialize the dictionary and the helper class."""
         Submission.__init__(self, **kwargs, )
