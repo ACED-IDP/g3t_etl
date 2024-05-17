@@ -343,13 +343,6 @@ class FHIRTransformer(ABC):
         procedure.id = self.mint_id(identifier=identifier, resource_type='Procedure')
         procedure.subject = self.to_reference(patient)
 
-        # TODO remove, the template should be responsible for this
-        # for field, info in procedure_mapping.items():
-        #     if field in ['code', 'identifier']:
-        #         # already processed this
-        #         continue
-        #     setattr(procedure, field, info.value)
-
         for _ in generated_resources:
             if _.resource_type == 'Condition':
                 procedure.reason = [self.to_codeable_reference(resource=_)]
