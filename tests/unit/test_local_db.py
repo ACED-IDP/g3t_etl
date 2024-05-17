@@ -194,7 +194,8 @@ def test_procedure_everything(loaded_db, procedure_expected_resource_count):
     resource = json.loads(resource)
     assert 'id' in resource, "No id in procedure"
     assert 'code' in resource, "No code in procedure"
-    assert 'gleason' in resource.keys(), "No gleason in procedure"
+    print(resource.keys())
+    assert 'gleason' in resource.keys(), f"No gleason in procedure, {resource.keys()}"
     assert 'reason' in resource.keys(), "No reason in procedure"
     # from pprint import pprint
     # pprint(resource)

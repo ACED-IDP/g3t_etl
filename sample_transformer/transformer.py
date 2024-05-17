@@ -2,12 +2,13 @@ import logging
 import re
 from typing import Any, Optional
 
+from fhir.resources.identifier import Identifier
 from fhir.resources.researchstudy import ResearchStudy
 from fhir.resources.resource import Resource
 from pydantic import BaseModel, computed_field
 
 from g3t_etl import factory
-from g3t_etl.factory import FHIRTransformer
+from g3t_etl.transformer import FHIRTransformer
 from sample_transformer.submission import Submission
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,8 @@ class SimpleTransformer(Submission, FHIRTransformer):
     @property
     def deconstructed_id(self) -> DeconstructedID:
         """Deconstruct the ID."""
+        if not self.id:
+            return None
         return split_id(self.id)
 
     @computed_field(json_schema_extra={'fhir_resource_type': 'Patient.identifier'})
@@ -85,6 +88,15 @@ class SimpleTransformer(Submission, FHIRTransformer):
             lesion_identifier += f"_{deconstructed_id.tissue_block}"
         return f"{deconstructed_id.patient_id}/{lesion_identifier}/{self.procedure_occurrence_age['value']}"
 
+    @computed_field(json_schema_extra={'fhir_resource_type': 'Condition.identifier'})
+    @property
+    def condition_identifier(self) -> Identifier:
+        """Return the mri_area ID."""
+        # loaded from spreadsheet
+        # TODO code = condition_mapping['code'].value
+        # assert 'code' in self.mapped_fields['Condition'], f'condition_code not in mapped_fields {self.mapped_fields.keys()}'
+        return self.populate_identifier(value=self.deconstructed_id.patient_id + '/Condition')
+
     @computed_field(json_schema_extra={'fhir_resource_type': 'Procedure.code'})
     @property
     def procedure_code(self) -> str:
@@ -103,6 +115,8 @@ class SimpleTransformer(Submission, FHIRTransformer):
     @property
     def procedure_occurrence_age(self) -> str:
         """Calculate the occurrence age."""
+        if not self.ageDiagM:
+            return None
         occurrence_age = self.ageDiagM + self.months_diag
         occurrence_age = self.to_quantity(value=occurrence_age, field_info=self.model_fields['ageDiagM'])
         return occurrence_age
@@ -112,11 +126,12 @@ class SimpleTransformer(Submission, FHIRTransformer):
         return self._to_fhir(research_study=research_study)
 
     def _to_fhir(self, research_study: ResearchStudy) -> [Resource]:
-        """Convert to FHIR."""
+        """Convert to FHIR, simple delegation to default_transform."""
         return self.default_transform(research_study=research_study)
 
 
 def register() -> None:
+    """Inform the factory of the transformer."""
     factory.register(
         transformer=SimpleTransformer,
         dictionary_path="tests/fixtures/sample_data_dictionary.xlsx",

@@ -1,15 +1,18 @@
 import pathlib
 import re
 
+import inflection
 import numpy as np
 import pandas as pd
+
+import gen3_tracker.config as g3t_config
 
 
 def spreadsheet_json_schema(input_path: pathlib.Path, sheet_main: str = 'fhir_mapping') -> dict:
     """Read spreadsheet, create schema."""
     df = read_excel_worksheet(input_path, sheet_main)
     df = df.replace({np.nan: ""})
-    schema = create_jsonschema(df)
+    schema = create_jsonschema(df, title=inflection.camelize(input_path.stem))
     return schema
 
 
@@ -54,7 +57,8 @@ def _map_name(name):
 def create_jsonschema(input_df,
                       name_column: str = 'csv_column_name',
                       type_column: str = 'csv_type',
-                      description_column: str = 'csv_description'
+                      description_column: str = 'csv_description',
+                      title: str = 'submission'
                       ) -> dict:
     """
     Derive jsonschema from spreadsheet.
@@ -66,13 +70,14 @@ def create_jsonschema(input_df,
     - type_column (str): The name of the column containing the submitted type name.
 
     """
+    config = g3t_config.default()
 
     schema = {
-        "$id": "https://aced-idp.org/ucl-stravrinides/submission.schema.json",
+        "$id": f"https://aced-idp.org/{config.gen3.project_id}/submission.schema.json",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "submission",
+        "title": title,
         "type": "object",
-        "description": "Raw tabular data submitted by UCL",
+        "description": f"Raw tabular data submitted by {config.gen3.project_id}",
         "properties": {}
     }
 

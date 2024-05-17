@@ -101,11 +101,11 @@ The transformations are based on the data dictionary and the following resources
 ```shell
 templates/
 ├── Condition.yaml.jinja
-├── Observation.yaml
+├── Observation.yaml.jinja
 ├── ResearchStudy.yaml
 └── submission.schema.json
 
-Where Condition.yaml.jinja, Observation.yaml, ResearchStudy.yaml are templates for the respective resources.
+Where Condition.yaml.jinja, Observation.yaml.jinja, ResearchStudy.yaml are templates for the respective resources.
 and submission.schema.json is the master data dictionary.
 ```
 
