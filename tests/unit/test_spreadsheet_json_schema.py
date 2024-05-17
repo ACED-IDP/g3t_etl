@@ -8,7 +8,7 @@ def test_spreadsheet_json_schema(data_dictionary_input_path, expected_keys):
     assert 'title' in schema, f"should have title in {schema}"
     assert 'properties' in schema, f"should have properties in {schema}"
     assert '$id' in schema, f"should have id in {schema}"
-    expected_id = "https://aced-idp.org/ucl-stravrinides/submission.schema.json"
+    expected_id = "https://aced-idp.org/test-sample_transformer/submission.schema.json"
     assert schema['$id'] == expected_id, f"should have id in {schema}"
     actual_keys = sorted(schema['properties'].keys())
     print(actual_keys)
