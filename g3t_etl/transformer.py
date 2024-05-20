@@ -17,7 +17,7 @@ from fhir.resources.codeablereference import CodeableReference
 from fhir.resources.condition import Condition
 from fhir.resources.fhirtypes import CodeableConceptType
 from fhir.resources.identifier import Identifier
-from fhir.resources.observation import Observation
+from fhir.resources.observation import Observation, ObservationComponent
 from fhir.resources.patient import Patient
 from fhir.resources.practitioner import Practitioner
 from fhir.resources.procedure import Procedure
@@ -454,12 +454,15 @@ class FHIRTransformer(BaseModel):
 
         # TODO - we already have self.observation_mapping, so we can use that?
         observation_fields = {}
+        observation_components = {}
         for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
             if not field_info.json_schema_extra:
                 continue
             if 'observation_subject' in field_info.json_schema_extra:
                 if field_info.json_schema_extra['observation_subject'] == focus.resource_type:
                     observation_fields[field] = field_info
+            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.component':
+                observation_components[field] = field_info
 
         # for all attributes in raw record ...
         for field, field_info in observation_fields.items():
@@ -479,7 +482,10 @@ class FHIRTransformer(BaseModel):
             if not display:
                 display = value
 
-            observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
+            try:
+                observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
+            except Exception as e:
+                observation_dict = self.render_template(f"Observation.yaml.jinja")
 
             # override the code
             if 'code' in observation_dict:
@@ -496,7 +502,7 @@ class FHIRTransformer(BaseModel):
             if more_codings:
                 observation.code.coding.extend(more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
 
-            # the annotations are often decorated with Optional, so cast to string and check for the type
+            # value[x] the annotations are often decorated with Optional, so cast to string and check for the type
             field_type = str(field_info.annotation)
             if 'int' in field_type:
                 observation.valueInteger = getattr(self, field)
@@ -505,6 +511,15 @@ class FHIRTransformer(BaseModel):
             else:
                 observation.valueString = getattr(self, field)
 
+            for component_field, component_field_info in observation_components.items():
+                component_value = getattr(self, component_field)
+                component = ObservationComponent(code={'coding': [{'system': self._helper.system, 'code': component_value}], 'text': component_value})
+                # TODO value[x]
+                component.valueString = component_value
+
+                if not observation.component:
+                    observation.component = []
+                observation.component.append(component)
             observations.append(observation)
 
         return observations
