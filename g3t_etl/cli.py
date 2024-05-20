@@ -180,6 +180,8 @@ def transform_csv_cli(ctx, input_path: str, output_path: str, verbose: bool):
     """
 
     try:
+        if ctx.obj.get('debug', False):
+            verbose = True
         transformation_results = transform_csv(input_path=input_path, output_path=output_path, verbose=verbose)
         if not transformation_results.transformer_errors and not transformation_results.validation_errors:
             click.secho(f"Transformed {input_path} into {output_path}", fg='green', file=sys.stderr)

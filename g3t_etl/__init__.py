@@ -16,6 +16,7 @@ from fhir.resources.resource import Resource
 from gen3_tracker.common import read_ndjson_file
 from nested_lookup import nested_lookup
 from pydantic import BaseModel, computed_field, ConfigDict, ValidationError, field_validator
+from pydantic_core import InitErrorDetails
 logger = logging.getLogger(__name__)
 
 IDENTIFIER_USE = 'official'
@@ -80,6 +81,11 @@ class TransformerHelper(IdMinter):
         """Populate a FHIR Identifier."""
         if not system or 'http' not in system:
             system = self.system
+        if not value:
+            raise ValidationError.from_exception_data(
+                title="value is required for Identifier",
+                line_errors=[InitErrorDetails(type='missing', loc=("value",), msg="value is required for Identifier")],
+            )
         _ = Identifier(system=system, value=value, use=use)
         return _
 

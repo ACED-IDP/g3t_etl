@@ -19,15 +19,17 @@ from fhir.resources.fhirtypes import CodeableConceptType
 from fhir.resources.identifier import Identifier
 from fhir.resources.observation import Observation
 from fhir.resources.patient import Patient
+from fhir.resources.practitioner import Practitioner
 from fhir.resources.procedure import Procedure
 from fhir.resources.reference import Reference
 from fhir.resources.researchstudy import ResearchStudy
 from fhir.resources.researchsubject import ResearchSubject
 from fhir.resources.resource import Resource
-from fhir.resources.specimen import Specimen
+from fhir.resources.specimen import Specimen, SpecimenCollection
 from jinja2 import Environment, FileSystemLoader, select_autoescape, PackageLoader
 from pydantic import ConfigDict
 from pydantic.fields import FieldInfo
+from pydantic import BaseModel
 
 from g3t_etl import TransformerHelper, Transformer
 
@@ -68,6 +70,8 @@ transformers: list[Callable[..., Transformer]] = []
 default_dictionary_path: None
 
 
+
+
 def default_transformer():
     """Default transformer."""
     return transformers[0]
@@ -104,7 +108,7 @@ class FieldMappingInstance(NamedTuple):
     value: Any
 
 
-class FHIRTransformer(ABC):
+class FHIRTransformer(BaseModel):
     """Abstract helper class, implementers can combine with a BaseModel of their submission."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra='allow')
@@ -120,15 +124,23 @@ class FHIRTransformer(ABC):
     """mapped fields by resource_type."""
     _observation_mapping: list[FieldMappingInstance] = []
     """mapped associations for observations."""
+    _helper: TransformerHelper = DEFAULT_HELPER
+    """Useful fhir utilities"""
+    _template_helper: TemplateHelper = None
+    """Transform templates"""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize, save passed helper."""
+        # must be done first
+        super().__init__(**kwargs)
 
         # helper is a class that provides utility functions for creating FHIR resources
-        self._helper: TransformerHelper = kwargs.get('helper', None)
+        self._helper: TransformerHelper = kwargs.get('helper', DEFAULT_HELPER)
+        assert self._helper, f"helper should be set"
 
         # template_helper is a class that provides utility functions for creating JINJA templates
         self._template_helper = kwargs.get('template_helper', None)
+        assert self._template_helper, f"template_helper should be set"
 
         # look into the generated class and find the fields that are mapped to FHIR resources
         self._mapped_fields = {k: v for k, v in self.model_fields.items() if
@@ -164,6 +176,7 @@ class FHIRTransformer(ABC):
                 self._observation_mapping.append(FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
             else:
                 assert False, f"unknown mapping {(k, v)}"
+        # print(f"FHIRTransformer init id: {id(self)}",  f"_helper:{self._helper}", f"_template_helper: {self._template_helper}")
 
     def render_template(self, template_name: str) -> dict:
         """Render a template, populated with transformer's values."""
@@ -220,6 +233,26 @@ class FHIRTransformer(ABC):
         """Create a research study."""
         return self.template_research_study()
 
+    def create_practioner(self, generated_resources: list[Resource]) -> Practitioner | None:
+        """Create a patient."""
+        if 'Practitioner' not in self.resource_mapping:
+            return None
+
+        practioner_mapping = self.resource_mapping['Practitioner']
+        assert 'identifier' in practioner_mapping, f"Practitioner must have an identifier {self}"
+        identifier = self.populate_identifier(value=practioner_mapping['identifier'].value)
+        practitioner = self.template_practitioner()
+        practitioner.id = self.mint_id(identifier=identifier, resource_type='Patient')
+        practitioner.identifier = [identifier]
+
+        for field, info in practioner_mapping.items():
+            if field == 'identifier':
+                # already processed this
+                continue
+            setattr(practitioner, field, info['value'])
+
+        return practitioner
+
     def create_patient(self, generated_resources: list[Resource]) -> Patient | None:
         """Create a patient."""
         if 'Patient' not in self.resource_mapping:
@@ -244,14 +277,23 @@ class FHIRTransformer(ABC):
         """Create a specimen."""
         if 'Specimen' not in self.resource_mapping:
             return None
-
         specimen_mapping = self.resource_mapping['Specimen']
         assert 'identifier' in specimen_mapping, f"Specimen must have an identifier {self}"
+        if not specimen_mapping['identifier'].value:
+            return None
         identifier = self.populate_identifier(value=specimen_mapping['identifier'].value)
+
         assert patient, f"Patient must be created before Specimen {self}"
         specimen = self.template_specimen(subject=self.to_reference(patient))
         specimen.identifier = [identifier]
         specimen.id = self.mint_id(identifier=identifier, resource_type='Patient')
+
+        practioner = next(iter([_ for _ in generated_resources if _.resource_type == 'Practitioner']), None)
+        if practioner:
+            if not specimen.collection:
+                specimen.collection = SpecimenCollection()
+            specimen.collection.collector = self.to_reference(practioner)
+
         for field, info in specimen_mapping.items():
             if field == 'identifier':
                 # already processed this
@@ -264,18 +306,23 @@ class FHIRTransformer(ABC):
                 value = info.value
                 # TODO - there should be a more elegant way to do this
                 # TODO for now, let's maintain these nested fields manually :-(  - need to use templates
-                if 'collection.bodySite' == field:
-                    specimen.collection.bodySite = self.to_codeable_reference(concept=self.populate_codeable_concept(code=value, display=value))
-                    continue
-                if 'processing[0].method' == field:
-                    specimen.processing[0].method = self.populate_codeable_concept(code=value, display=value)
-                    continue
-                if 'parent' == field:
-                    parent_identifier = self.populate_identifier(value=value)
-                    parent_id = self.mint_id(identifier=parent_identifier, resource_type='Specimen')
-                    specimen.parent = [Reference(reference=f"Specimen/{parent_id}")]
-                    continue
+                # if 'collection.bodySite' == field:
+                #     specimen.collection.bodySite = self.to_codeable_reference(concept=self.populate_codeable_concept(code=value, display=value))
+                #     continue
+                # if 'processing[0].method' == field:
+                #     specimen.processing[0].method = self.populate_codeable_concept(code=value, display=value)
+                #     continue
+                # if 'parent' == field:
+                #     parent_identifier = self.populate_identifier(value=value)
+                #     parent_id = self.mint_id(identifier=parent_identifier, resource_type='Specimen')
+                #     specimen.parent = [Reference(reference=f"Specimen/{parent_id}")]
+                #     continue
 
+                if field not in specimen.__fields__:
+                    if f'not_found_{field}' not in self.logged_already:
+                        logger.warning(f"{field} not found in Specimen, handle in transformer")
+                        self.logged_already.append(f'not_found_{field}')
+                    continue
 
                 if specimen.__fields__[field].outer_type_ == CodeableConceptType:
                     value = self.populate_codeable_concept(code=value, display=value)
@@ -285,7 +332,6 @@ class FHIRTransformer(ABC):
             except Exception as e:
                 logger.error(f"Error setting field {field} to {info.value}: {e}")
                 raise e
-
         return specimen
 
     def create_condition(self, patient: Patient | None, generated_resources: list[Resource]) -> Condition | None:
@@ -368,6 +414,10 @@ class FHIRTransformer(ABC):
 
         generated_resources: list[Resource] = [research_study]
 
+        practioner = self.create_practioner(generated_resources)
+        if practioner:
+            generated_resources.extend([practioner])
+
         patient = self.create_patient(generated_resources)
         if patient:
             research_subject = self.create_research_subject(patient, research_study)
@@ -385,11 +435,14 @@ class FHIRTransformer(ABC):
         if procedure:
             generated_resources.append(procedure)
 
+        generated_observations = []
         for _ in generated_resources:
             observations = self.create_observations(subject=patient, focus=_)
             if observations:
-                generated_resources.extend(observations)
+                generated_observations.extend(observations)
+        generated_resources.extend(generated_observations)
 
+        assert all([_ for _ in generated_resources]), "Should not have a None"
         return generated_resources
 
     def create_observations(self, subject, focus) -> list[Observation]:
@@ -484,10 +537,9 @@ class FHIRTransformer(ABC):
         # dispatch to helper
         return self._helper.populate_identifier(*args, **kwargs)
 
-    def to_reference(self, *args: Any, **kwargs: Any) -> Reference:
+    def to_reference(self, resource: Resource) -> Reference:
         """Create a reference from a resource of the form RESOURCE/id."""
-        # dispatch to helper
-        return self._helper.to_reference(*args, **kwargs)
+        return Reference(reference=f"{resource.resource_type}/{resource.id}")
 
     def to_codeable_reference(self, *args: Any, **kwargs: Any) -> CodeableReference:
         """Create a reference from a resource of the form RESOURCE/id."""
@@ -514,12 +566,20 @@ class FHIRTransformer(ABC):
     def template_specimen(self, *args: Any, **kwargs: Any) -> Specimen:
         """Create a generic specimen."""
         # dispatch to jinja
+        # _ = self.render_template("Specimen.yaml.jinja")
+        # # print('>', _, '<')
+        # print(_['collection']['bodySite'])
         return Specimen(**self.render_template("Specimen.yaml.jinja"))
 
     def template_patient(self, *args: Any, **kwargs: Any) -> Patient:
         """Create a generic patient."""
         # dispatch to jinja
         return Patient(**self.render_template("Patient.yaml.jinja"))
+
+    def template_practitioner(self, *args: Any, **kwargs: Any) -> Practitioner:
+        """Create a generic practitioner."""
+        # dispatch to jinja
+        return Practitioner(**self.render_template("Practitioner.yaml.jinja"))
 
     @classmethod
     def template_dir(cls) -> pathlib.Path:
@@ -620,7 +680,7 @@ class TRANSFORMER_CLASS(SUBMISSION_CLASS, FHIRTransformer):
 
 def register() -> None:
     factory.register(
-        transformer=Transformer
+        transformer=TRANSFORMER_CLASS
     )
 
 '''

@@ -18,7 +18,7 @@ def default_transformer():
     return transformers[0]
 
 
-def register(transformer: Callable[..., Transformer], dictionary_path: str) -> None:
+def register(transformer: Callable[..., Transformer], dictionary_path: str = None) -> None:
     """Register a new transformer."""
     transformers.append(transformer)
     global default_dictionary_path
@@ -62,7 +62,7 @@ def transform_csv(input_path: pathlib.Path,
     emitted_count = 0
     validation_errors = []
     transformer_errors = []
-
+    research_study = None
     try:
         transformer_class = default_transformer()
         template_helper = TemplateHelper(transformer_class.template_dir())
@@ -87,6 +87,7 @@ def transform_csv(input_path: pathlib.Path,
         try:
             transformer = transformer_class(**record, helper=DEFAULT_HELPER, template_helper=template_helper)
             parsed_count += 1
+
         except ValidationError as e:
             validation_errors.append(e)
             print_validation_error(e, parsed_count, input_path, record, verbose)
@@ -105,7 +106,7 @@ def transform_csv(input_path: pathlib.Path,
         except ValidationError as e:
             transformer_errors.append(e)
             print_transformation_error(e, parsed_count, input_path, record, verbose)
-            raise e
+            # raise e
 
         # print profile results
         # pr.disable()
