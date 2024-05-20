@@ -298,6 +298,9 @@ class FHIRTransformer(BaseModel):
             if field == 'identifier':
                 # already processed this
                 continue
+            if field == 'subject':
+                # already processed this
+                continue
             field_root = field.split('.')[0].split('[')[0]
             if not hasattr(specimen, field_root):
                 logger.warning(f"Specimen has no field {field} {info['value']}")
@@ -569,7 +572,10 @@ class FHIRTransformer(BaseModel):
         # _ = self.render_template("Specimen.yaml.jinja")
         # # print('>', _, '<')
         # print(_['collection']['bodySite'])
-        return Specimen(**self.render_template("Specimen.yaml.jinja"))
+        _ = Specimen(**self.render_template("Specimen.yaml.jinja"))
+        if 'subject' in kwargs:
+            _.subject = kwargs['subject']
+        return _
 
     def template_patient(self, *args: Any, **kwargs: Any) -> Patient:
         """Create a generic patient."""
