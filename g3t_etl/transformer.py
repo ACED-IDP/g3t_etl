@@ -286,7 +286,7 @@ class FHIRTransformer(BaseModel):
         assert patient, f"Patient must be created before Specimen {self}"
         specimen = self.template_specimen(subject=self.to_reference(patient))
         specimen.identifier = [identifier]
-        specimen.id = self.mint_id(identifier=identifier, resource_type='Patient')
+        specimen.id = self.mint_id(identifier=identifier, resource_type='Specimen')
 
         practioner = next(iter([_ for _ in generated_resources if _.resource_type == 'Practitioner']), None)
         if practioner:
@@ -323,7 +323,7 @@ class FHIRTransformer(BaseModel):
 
                 if field not in specimen.__fields__:
                     if f'not_found_{field}' not in self.logged_already:
-                        logger.warning(f"{field} not found in Specimen, handle in transformer")
+                        logger.debug(f"{field} not found in Specimen, handle in transformer")
                         self.logged_already.append(f'not_found_{field}')
                     continue
 
@@ -478,7 +478,9 @@ class FHIRTransformer(BaseModel):
             more_codings = additional_observation_codings(field_info)
 
             code = field
+            underscored_code = inflection.underscore(field)
             display = field_info.description
+
             if not display:
                 display = value
 
@@ -492,13 +494,14 @@ class FHIRTransformer(BaseModel):
                 del observation_dict['code']
             observation = Observation(
                 **observation_dict,
-                code=self.populate_codeable_concept(code=code, display=display)
+                code=self.populate_codeable_concept(code=underscored_code, display=display)
             )
 
             observation.id = id_
             observation.identifier = [identifier]
             observation.subject = self.to_reference(subject)
             observation.focus = [self.to_reference(focus)]
+
             if more_codings:
                 observation.code.coding.extend(more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
 
@@ -513,9 +516,30 @@ class FHIRTransformer(BaseModel):
 
             for component_field, component_field_info in observation_components.items():
                 component_value = getattr(self, component_field)
-                component = ObservationComponent(code={'coding': [{'system': self._helper.system, 'code': component_value}], 'text': component_value})
+                underscored_component_field = inflection.underscore(component_field)
+
+                component = ObservationComponent(
+                    code={
+                        'coding': [
+                            {
+                                'system': self._helper.system,
+                                'code': underscored_component_field,
+                                'display': component_field,
+                            }
+                        ],
+                        'text': component_field
+                    }
+                )
+
                 # TODO value[x]
-                component.valueString = component_value
+                field_type = str(component_field_info.annotation)
+                if 'int' in field_type:
+                    component.valueInteger = getattr(self, component_field)
+                elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
+                    component.valueQuantity = self.to_quantity(field=component_field, field_info=component_field_info, value=component_value)
+                else:
+                    component.valueString = getattr(self, component_field)
+
 
                 if not observation.component:
                     observation.component = []
