@@ -1,4 +1,4 @@
-gen3_tracker>=0.0.4rc5
+gen3_tracker>=0.0.4rc6
 click
 pandas
 numpy
