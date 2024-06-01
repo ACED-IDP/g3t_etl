@@ -455,6 +455,8 @@ class FHIRTransformer(BaseModel):
         # TODO - we already have self.observation_mapping, so we can use that?
         observation_fields = {}
         observation_components = {}
+        identifier = None
+        code = None
         for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
             if not field_info.json_schema_extra:
                 continue
@@ -463,6 +465,20 @@ class FHIRTransformer(BaseModel):
                     observation_fields[field] = field_info
             if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.component':
                 observation_components[field] = field_info
+            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
+                value = getattr(self, field)
+                # this is when we want to create an observation all attributes in the row
+                identifier = self.observation_identifier(value, focus, subject)
+            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.code':
+                value = getattr(self, field)
+                underscored_code = inflection.underscore(field)
+                display = field_info.description
+                if not display:
+                    display = value
+                if not display:
+                    display = 'Unknown'
+                code = self.populate_codeable_concept(code=underscored_code, display=display)
+
 
         # for all attributes in raw record ...
         for field, field_info in observation_fields.items():
@@ -472,17 +488,19 @@ class FHIRTransformer(BaseModel):
             if not value:
                 continue
 
-            # and create an observation
-            identifier = self.observation_identifier(field, focus, subject)
+            # this is when we want to create an observation for each attribute in the row
+            if not identifier:
+                identifier = self.observation_identifier(field, focus, subject)
+
             id_ = self.mint_id(identifier=identifier, resource_type='Observation')
             more_codings = additional_observation_codings(field_info)
 
-            code = field
-            underscored_code = inflection.underscore(field)
-            display = field_info.description
-
-            if not display:
-                display = value
+            if not code:
+                underscored_code = inflection.underscore(field)
+                display = field_info.description
+                if not display:
+                    display = value
+                code = self.populate_codeable_concept(code=underscored_code, display=display)
 
             try:
                 observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
@@ -492,9 +510,10 @@ class FHIRTransformer(BaseModel):
             # override the code
             if 'code' in observation_dict:
                 del observation_dict['code']
+
             observation = Observation(
                 **observation_dict,
-                code=self.populate_codeable_concept(code=underscored_code, display=display)
+                code=code
             )
 
             observation.id = id_
@@ -504,15 +523,6 @@ class FHIRTransformer(BaseModel):
 
             if more_codings:
                 observation.code.coding.extend(more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
-
-            # value[x] the annotations are often decorated with Optional, so cast to string and check for the type
-            field_type = str(field_info.annotation)
-            if 'int' in field_type:
-                observation.valueInteger = getattr(self, field)
-            elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
-                observation.valueQuantity = self.to_quantity(field=field, field_info=field_info)
-            else:
-                observation.valueString = getattr(self, field)
 
             for component_field, component_field_info in observation_components.items():
                 component_value = getattr(self, component_field)
@@ -544,6 +554,18 @@ class FHIRTransformer(BaseModel):
                 if not observation.component:
                     observation.component = []
                 observation.component.append(component)
+
+            # if there are components, then the value[x] is not set
+            if not observation.component:
+                # value[x] the annotations are often decorated with Optional, so cast to string and check for the type
+                field_type = str(field_info.annotation)
+                if 'int' in field_type:
+                    observation.valueInteger = getattr(self, field)
+                elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
+                    observation.valueQuantity = self.to_quantity(field=field, field_info=field_info)
+                else:
+                    observation.valueString = getattr(self, field)
+
             observations.append(observation)
 
         return observations
