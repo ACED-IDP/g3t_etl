@@ -1,3 +1,5 @@
+import os
+
 import pathlib
 import re
 
@@ -73,9 +75,13 @@ def create_jsonschema(input_df,
 
     """
     config = g3t_config.default()
+    project_id = config.gen3.project_id
+    if not project_id:
+        project_id = os.environ.get('G3T_PROJECT_ID', None)
+    assert project_id, "project_id not set, please initialize g3t or set environment variable G3T_PROJECT_ID"
 
     schema = {
-        "$id": f"https://aced-idp.org/{config.gen3.project_id}/submission.schema.json",
+        "$id": f"https://aced-idp.org/{project_id}/submission.schema.json",
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": title,
         "type": "object",
