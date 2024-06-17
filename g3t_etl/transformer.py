@@ -61,7 +61,10 @@ if pathlib.Path('.g3t/config.yaml').exists():
         config = yaml.safe_load(f)
         _project_id = config['gen3']['project_id']
 else:
-    logger.warning(f"No .g3t/config.yaml found. See `g3t init` or `g3t clone`.  Proceeding with project_id {_project_id}.")
+    if 'G3T_PROJECT_ID' not in os.environ:
+        logger.warning(f"No .g3t/config.yaml found. See `g3t init` or `g3t clone`.  Proceeding with project_id {_project_id}.")
+    else:
+        _project_id = os.environ['G3T_PROJECT_ID']
 
 DEFAULT_HELPER = TransformerHelper(project_id=_project_id)
 
@@ -625,6 +628,8 @@ class FHIRTransformer(BaseModel):
         """Create a generic procedure."""
         # dispatch to jinja
         procedure_dict = self.render_template("Procedure.yaml.jinja")
+        assert subject, f"Subject must be created before Procedure {self}"
+        assert subject.id, f"Subject must have an id before Procedure"
         return Procedure(**procedure_dict, subject=self.to_reference(subject))
 
     def template_specimen(self, *args: Any, **kwargs: Any) -> Specimen:
