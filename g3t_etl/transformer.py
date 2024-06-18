@@ -458,8 +458,8 @@ class FHIRTransformer(BaseModel):
         # TODO - we already have self.observation_mapping, so we can use that?
         observation_fields = {}
         observation_components = {}
-        identifier = None
-        code = None
+        observation_identifier = None
+        observation_code = None
         for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
             if not field_info.json_schema_extra:
                 continue
@@ -468,10 +468,10 @@ class FHIRTransformer(BaseModel):
                     observation_fields[field] = field_info
             if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.component':
                 observation_components[field] = field_info
-            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
-                value = getattr(self, field)
-                # this is when we want to create an observation all attributes in the row
-                identifier = self.observation_identifier(value, focus, subject)
+            # if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
+            #     value = getattr(self, field)
+            #     # this is when we want to create an observation all attributes in the row
+            #     identifier = self.observation_identifier(value, focus, subject)
             if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.code':
                 value = getattr(self, field)
                 underscored_code = inflection.underscore(field)
@@ -480,7 +480,7 @@ class FHIRTransformer(BaseModel):
                     display = value
                 if not display:
                     display = 'Unknown'
-                code = self.populate_codeable_concept(code=underscored_code, display=display)
+                observation_code = self.populate_codeable_concept(code=underscored_code, display=display)
 
 
         # for all attributes in raw record ...
@@ -492,18 +492,26 @@ class FHIRTransformer(BaseModel):
                 continue
 
             # this is when we want to create an observation for each attribute in the row
-            if not identifier:
+            if not observation_identifier:
                 identifier = self.observation_identifier(field, focus, subject)
+                if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
+                    value = getattr(self, field)
+                    # this is when we want to create an observation all attributes in the row
+                    identifier = self.observation_identifier(value, focus, subject)
+            else:
+                identifier = observation_identifier
 
             id_ = self.mint_id(identifier=identifier, resource_type='Observation')
             more_codings = additional_observation_codings(field_info)
 
-            if not code:
+            if not observation_code:
                 underscored_code = inflection.underscore(field)
                 display = field_info.description
                 if not display:
                     display = value
                 code = self.populate_codeable_concept(code=underscored_code, display=display)
+            else:
+                code = observation_code
 
             try:
                 observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
