@@ -249,7 +249,7 @@ class FHIRTransformer(BaseModel):
         assert 'identifier' in practioner_mapping, f"Practitioner must have an identifier {self}"
         identifier = self.populate_identifier(value=practioner_mapping['identifier'].value)
         practitioner = self.template_practitioner()
-        practitioner.id = self.mint_id(identifier=identifier, resource_type='Patient')
+        practitioner.id = self.mint_id(identifier=identifier, resource_type='Practitioner')
         practitioner.identifier = [identifier]
 
         for field, info in practioner_mapping.items():
