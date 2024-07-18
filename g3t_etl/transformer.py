@@ -174,7 +174,11 @@ class FHIRTransformer(BaseModel):
             # only mappings with properties
             if '.' in resource_type:
                 resource_type, _ = resource_type.split('.', maxsplit=1)
-                self._resource_mapping[resource_type][_] = FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)})
+                if resource_type == 'Observation':
+                    self._observation_mapping.append(
+                        FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
+                else:
+                    self._resource_mapping[resource_type][_] = FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)})
             elif resource_type == 'Observation':
                 self._observation_mapping.append(FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
             else:
@@ -245,7 +249,7 @@ class FHIRTransformer(BaseModel):
         assert 'identifier' in practioner_mapping, f"Practitioner must have an identifier {self}"
         identifier = self.populate_identifier(value=practioner_mapping['identifier'].value)
         practitioner = self.template_practitioner()
-        practitioner.id = self.mint_id(identifier=identifier, resource_type='Patient')
+        practitioner.id = self.mint_id(identifier=identifier, resource_type='Practitioner')
         practitioner.identifier = [identifier]
 
         for field, info in practioner_mapping.items():
