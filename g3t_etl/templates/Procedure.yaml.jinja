@@ -1,0 +1,7 @@
+# template for a FHIR Procedure resource
+# see: https://www.hl7.org/fhir/procedure.html
+# id, identifier, code, subject, reason are dynamically generated
+---
+resourceType: Procedure
+status: completed
+occurrenceAge: {{ transformer.procedure_occurrence_age }}

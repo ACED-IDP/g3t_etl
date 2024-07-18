@@ -1,19 +1,22 @@
 import logging
 import pathlib
+import subprocess
 import sys
 import traceback
 import uuid
 from collections import defaultdict
-from typing import Callable, TextIO, Optional, Any
+from typing import Callable, TextIO, Optional, Any, Protocol
 
 from fhir.resources.codeableconcept import CodeableConcept
 from fhir.resources.codeablereference import CodeableReference
 from fhir.resources.identifier import Identifier
 from fhir.resources.reference import Reference
+from fhir.resources.researchstudy import ResearchStudy
 from fhir.resources.resource import Resource
-from gen3_util.common import read_ndjson_file
+from gen3_tracker.common import read_ndjson_file
 from nested_lookup import nested_lookup
 from pydantic import BaseModel, computed_field, ConfigDict, ValidationError, field_validator
+from pydantic_core import InitErrorDetails
 logger = logging.getLogger(__name__)
 
 IDENTIFIER_USE = 'official'
@@ -78,6 +81,11 @@ class TransformerHelper(IdMinter):
         """Populate a FHIR Identifier."""
         if not system or 'http' not in system:
             system = self.system
+        if not value:
+            raise ValidationError.from_exception_data(
+                title="value is required for Identifier",
+                line_errors=[InitErrorDetails(type='missing', loc=("value",), msg="value is required for Identifier")],
+            )
         _ = Identifier(system=system, value=value, use=use)
         return _
 
@@ -222,3 +230,25 @@ def print_validation_error(e: ValidationError, index, path, record, verbose: boo
         if verbose:
             tb = traceback.format_exc()
             print(error, tb, file=sys.stderr)
+
+
+class Transformer(Protocol):
+    """Basic representation of an ETL transformer."""
+
+    def transform(self, research_study: ResearchStudy = None) -> list[Resource]:
+        """Transform the input record into FHIR resources."""
+
+
+def run_command(cmd: str | list[str]) -> (int, str, str):
+    """Run a command. returns returncode, stdout, stderr."""
+
+    if isinstance(cmd, str):
+        cmd = cmd.split()
+
+    # Run the command
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    # Get the output and error
+    stdout, stderr = process.communicate()
+
+    return process.returncode, stdout.decode(), stderr.decode()

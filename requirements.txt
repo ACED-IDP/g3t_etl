@@ -1,4 +1,4 @@
-gen3_tracker>=0.0.2rc6
+gen3_tracker>=0.0.4rc36
 click
 pandas
 numpy
@@ -7,3 +7,4 @@ PyYAML
 orjson
 ndjson
 inflection
+jinja2

@@ -70,7 +70,7 @@ def simplify_procedure(procedure) -> dict[str, Any]:
     _.update({
         'procedure_code': procedure['code']['coding'][0]['display'],
         # 'procedure_reason': procedure['reason'][0]['reference']['reference'],
-        'procedure_occurrenceAge': procedure['occurrenceAge']['value']
+        # 'procedure_occurrenceAge': procedure['occurrenceAge']['value']
     })
     return _
 
@@ -251,7 +251,6 @@ class LocalFHIRDatabase:
         for _ in cursor.fetchall():
             key, resource_type, resource = _
             resource = json.loads(resource)
-
             # simplify the identifier
             resource['identifier'] = resource['identifier'][0]['value']
 
@@ -275,7 +274,6 @@ class LocalFHIRDatabase:
                 resources.append(loaded_db.patient(patient_id))
 
                 for related_resource in resources:
-
                     for k, v in simplify_related_resource(resource, related_resource).items():
                         resource[k] = v
 
