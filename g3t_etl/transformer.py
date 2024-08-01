@@ -313,31 +313,39 @@ class FHIRTransformer(BaseModel):
                 logger.warning(f"Specimen has no field {field} {info['value']}")
                 continue
             try:
-                value = info.value
-                # TODO - there should be a more elegant way to do this
-                # TODO for now, let's maintain these nested fields manually :-(  - need to use templates
-                # if 'collection.bodySite' == field:
-                #     specimen.collection.bodySite = self.to_codeable_reference(concept=self.populate_codeable_concept(code=value, display=value))
-                #     continue
-                # if 'processing[0].method' == field:
-                #     specimen.processing[0].method = self.populate_codeable_concept(code=value, display=value)
-                #     continue
-                # if 'parent' == field:
-                #     parent_identifier = self.populate_identifier(value=value)
-                #     parent_id = self.mint_id(identifier=parent_identifier, resource_type='Specimen')
-                #     specimen.parent = [Reference(reference=f"Specimen/{parent_id}")]
-                #     continue
+                if 'parent' == field:
+                    if isinstance(info, list) and len(info) > 0:
+                        specimen.parent = info
+                        # [setattr(specimen, field, item) for item in info] generates error: AttributeError: 'list' object has no attribute 'value'
+                    else:
+                        continue
+                else:
+                    value = info.value
 
-                if field not in specimen.__fields__:
-                    if f'not_found_{field}' not in self.logged_already:
-                        logger.debug(f"{field} not found in Specimen, handle in transformer")
-                        self.logged_already.append(f'not_found_{field}')
-                    continue
+                    # TODO - there should be a more elegant way to do this
+                    # TODO for now, let's maintain these nested fields manually :-(  - need to use templates
+                    # if 'collection.bodySite' == field:
+                    #     specimen.collection.bodySite = self.to_codeable_reference(concept=self.populate_codeable_concept(code=value, display=value))
+                    #     continue
+                    # if 'processing[0].method' == field:
+                    #     specimen.processing[0].method = self.populate_codeable_concept(code=value, display=value)
+                    #     continue
+                    # if 'parent' == field:
+                    #     parent_identifier = self.populate_identifier(value=value)
+                    #     parent_id = self.mint_id(identifier=parent_identifier, resource_type='Specimen')
+                    #     specimen.parent = [Reference(reference=f"Specimen/{parent_id}")]
+                    #     continue
 
-                if specimen.__fields__[field].outer_type_ == CodeableConceptType:
-                    value = self.populate_codeable_concept(code=value, display=value)
+                    if field not in specimen.__fields__:
+                        if f'not_found_{field}' not in self.logged_already:
+                            logger.debug(f"{field} not found in Specimen, handle in transformer")
+                            self.logged_already.append(f'not_found_{field}')
+                        continue
 
-                setattr(specimen, field, value)
+                    if specimen.__fields__[field].outer_type_ == CodeableConceptType:
+                        value = self.populate_codeable_concept(code=value, display=value)
+
+                    setattr(specimen, field, value)
 
             except Exception as e:
                 logger.error(f"Error setting field {field} to {info.value}: {e}")
