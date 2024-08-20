@@ -20,6 +20,7 @@ from fhir.resources.identifier import Identifier
 from fhir.resources.observation import Observation, ObservationComponent
 from fhir.resources.patient import Patient
 from fhir.resources.practitioner import Practitioner
+from fhir.resources.organization import Organization
 from fhir.resources.procedure import Procedure
 from fhir.resources.reference import Reference
 from fhir.resources.researchstudy import ResearchStudy
@@ -260,6 +261,26 @@ class FHIRTransformer(BaseModel):
 
         return practitioner
 
+    def create_organization(self, generated_resources: list[Resource]) -> Organization | None:
+        """Create a FHIR organization."""
+        if 'Organization' not in self.resource_mapping:
+            return None
+
+        organization_mapping = self.resource_mapping['Organization']
+        assert 'identifier' in organization_mapping, f"Organization must have an identifier {self}"
+        identifier = self.populate_identifier(value=organization_mapping['identifier'].value)
+        organization = self.template_organization()
+        organization.id = self.mint_id(identifier=identifier, resource_type='Organization')
+        organization.identifier = [identifier]
+
+        for field, info in organization_mapping.items():
+            if field == 'identifier':
+                # already processed this
+                continue
+            setattr(organization, field, info['value'])
+
+        return organization
+
     def create_patient(self, generated_resources: list[Resource]) -> Patient | None:
         """Create a patient."""
         if 'Patient' not in self.resource_mapping:
@@ -296,10 +317,16 @@ class FHIRTransformer(BaseModel):
         specimen.id = self.mint_id(identifier=identifier, resource_type='Specimen')
 
         practioner = next(iter([_ for _ in generated_resources if _.resource_type == 'Practitioner']), None)
+        organization = next(iter([_ for _ in generated_resources if _.resource_type == 'Organization']), None)
+
         if practioner:
             if not specimen.collection:
                 specimen.collection = SpecimenCollection()
             specimen.collection.collector = self.to_reference(practioner)
+        elif organization:
+            if not specimen.collection:
+                specimen.collection = SpecimenCollection()
+            specimen.collection.collector = self.to_reference(organization)
 
         for field, info in specimen_mapping.items():
             if field == 'identifier':
@@ -436,6 +463,10 @@ class FHIRTransformer(BaseModel):
         if practioner:
             generated_resources.extend([practioner])
 
+        organization = self.create_organization(generated_resources)
+        if organization:
+            generated_resources.extend([organization])
+
         patient = self.create_patient(generated_resources)
         if patient:
             research_subject = self.create_research_subject(patient, research_study)
@@ -550,7 +581,6 @@ class FHIRTransformer(BaseModel):
             for component_field, component_field_info in observation_components.items():
                 component_value = getattr(self, component_field)
                 underscored_component_field = inflection.underscore(component_field)
-
                 component = ObservationComponent(
                     code={
                         'coding': [
@@ -672,6 +702,11 @@ class FHIRTransformer(BaseModel):
         """Create a generic practitioner."""
         # dispatch to jinja
         return Practitioner(**self.render_template("Practitioner.yaml.jinja"))
+
+    def template_organization(self, *args: Any, **kwargs: Any) -> Organization:
+        """Create a generic organization."""
+        # dispatch to jinja
+        return Organization(**self.render_template("Organization.yaml.jinja"))
 
     @classmethod
     def template_dir(cls) -> pathlib.Path:
