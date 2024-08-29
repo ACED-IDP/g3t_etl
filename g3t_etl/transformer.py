@@ -549,40 +549,41 @@ class FHIRTransformer(BaseModel):
             id_ = self.mint_id(identifier=identifier, resource_type='Observation')
             more_codings = additional_observation_codings(field_info)
 
-            focus_reference = self.to_reference(focus)
-            if not observation_code and focus:
-                # add general required Observation code based on focus of Observation
-                if "Specimen" in focus_reference:
-                    code = self.populate_codeable_concept(system="https://loinc.org/",
-                                                              code="68992-7",
-                                                              display="Specimen-related information panel")
-                elif "Patient" in focus_reference:
-                    code = self.populate_codeable_concept(system="https://loinc.org/",
-                                                              code="68992-7",
-                                                              display="Specimen-related information panel")
-            elif not observation_code and not focus:
-                underscored_code = inflection.underscore(field)
-                display = field_info.description
-                if not display:
-                    display = value
-                code = self.populate_codeable_concept(code=underscored_code, display=display)
-            else:
-                code = observation_code
-
             try:
                 observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
             except Exception as e:
                 observation_dict = self.render_template(f"Observation.yaml.jinja")
 
-            # override the code
-            if 'code' in observation_dict:
+            code = None
+            if 'code' in observation_dict and not observation_code:
+                code = observation_dict['code']
                 del observation_dict['code']
+
+            focus_reference = self.to_reference(focus)
+            if not code:
+                if not observation_code and focus:
+                    # add general required Observation code based on focus of Observation
+                    if "Specimen" in focus_reference:
+                        code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                              code="68992-7",
+                                                              display="Specimen-related information panel")
+                    elif "Patient" in focus_reference:
+                        code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                              code="68992-7",
+                                                              display="Specimen-related information panel")
+                elif not observation_code and not focus:
+                    underscored_code = inflection.underscore(field)
+                    display = field_info.description
+                    if not display:
+                        display = value
+                    code = self.populate_codeable_concept(code=underscored_code, display=display)
+                else:
+                    code = observation_code
 
             observation = Observation(
                 **observation_dict,
                 code=code
             )
-
 
             observation.id = id_
             observation.identifier = [identifier]
