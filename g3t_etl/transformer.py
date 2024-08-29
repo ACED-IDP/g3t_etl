@@ -511,10 +511,12 @@ class FHIRTransformer(BaseModel):
                     observation_fields[field] = field_info
             if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.component':
                 observation_components[field] = field_info
+
             # if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
             #     value = getattr(self, field)
             #     # this is when we want to create an observation all attributes in the row
             #     identifier = self.observation_identifier(value, focus, subject)
+
             if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.code':
                 value = getattr(self, field)
                 underscored_code = inflection.underscore(field)
@@ -547,7 +549,18 @@ class FHIRTransformer(BaseModel):
             id_ = self.mint_id(identifier=identifier, resource_type='Observation')
             more_codings = additional_observation_codings(field_info)
 
-            if not observation_code:
+            focus_reference = self.to_reference(focus)
+            if not observation_code and focus:
+                # add general required Observation code based on focus of Observation
+                if "Specimen" in focus_reference:
+                    code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                              code="68992-7",
+                                                              display="Specimen-related information panel")
+                elif "Patient" in focus_reference:
+                    code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                              code="68992-7",
+                                                              display="Specimen-related information panel")
+            elif not observation_code and not focus:
                 underscored_code = inflection.underscore(field)
                 display = field_info.description
                 if not display:
@@ -570,10 +583,11 @@ class FHIRTransformer(BaseModel):
                 code=code
             )
 
+
             observation.id = id_
             observation.identifier = [identifier]
             observation.subject = self.to_reference(subject)
-            observation.focus = [self.to_reference(focus)]
+            observation.focus = [focus_reference]
 
             if more_codings:
                 observation.code.coding.extend(more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
