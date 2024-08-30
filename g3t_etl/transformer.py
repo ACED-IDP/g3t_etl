@@ -564,11 +564,11 @@ class FHIRTransformer(BaseModel):
                     del observation_dict['code']
                 else:
                     # print("empty or invalid 'code' field detected, assigning default:", observation_dict['code'])
-                    if "Specimen" in focus_reference:
+                    if "Specimen" in focus_reference.reference:
                         code = self.populate_codeable_concept(system="https://loinc.org/",
                                                               code="68992-7",
                                                               display="Specimen-related information panel")
-                    elif "Patient" in focus_reference:
+                    elif "Patient" in focus_reference.reference:
                         code = self.populate_codeable_concept(system="https://loinc.org/",
                                                               code="68992-7",
                                                               display="Specimen-related information panel")
