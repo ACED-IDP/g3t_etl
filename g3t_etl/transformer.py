@@ -555,19 +555,33 @@ class FHIRTransformer(BaseModel):
                 observation_dict = self.render_template(f"Observation.yaml.jinja")
 
             code = None
-            if 'code' in observation_dict and not observation_code:
-                code = observation_dict['code']
-                del observation_dict['code']
-
             focus_reference = self.to_reference(focus)
-            if not code:
-                if not observation_code and focus:
-                    # add general required Observation code based on focus of Observation
+
+            if 'code' in observation_dict and not observation_code:
+                coding_list = observation_dict['code'].get('coding', [])
+                if coding_list or observation_dict['code'].get('text'):
+                    code = observation_dict['code']
+                    del observation_dict['code']
+                else:
+                    # print("empty or invalid 'code' field detected, assigning default:", observation_dict['code'])
                     if "Specimen" in focus_reference:
                         code = self.populate_codeable_concept(system="https://loinc.org/",
                                                               code="68992-7",
                                                               display="Specimen-related information panel")
                     elif "Patient" in focus_reference:
+                        code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                              code="68992-7",
+                                                              display="Specimen-related information panel")
+                    del observation_dict['code']
+
+            if not code:
+                if not observation_code and focus:
+                    # Default code: adding general required Observation code based on the focus of Observation
+                    if "Specimen" in focus_reference.reference:
+                        code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                              code="68992-7",
+                                                              display="Specimen-related information panel")
+                    elif "Patient" in focus_reference.reference:
                         code = self.populate_codeable_concept(system="https://loinc.org/",
                                                               code="68992-7",
                                                               display="Specimen-related information panel")
@@ -589,9 +603,6 @@ class FHIRTransformer(BaseModel):
             observation.identifier = [identifier]
             observation.subject = self.to_reference(subject)
             observation.focus = [focus_reference]
-
-            if more_codings:
-                observation.code.coding.extend(more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
 
             for component_field, component_field_info in observation_components.items():
                 component_value = getattr(self, component_field)
@@ -618,7 +629,6 @@ class FHIRTransformer(BaseModel):
                 else:
                     component.valueString = getattr(self, component_field)
 
-
                 if not observation.component:
                     observation.component = []
                 observation.component.append(component)
@@ -633,6 +643,19 @@ class FHIRTransformer(BaseModel):
                     observation.valueQuantity = self.to_quantity(field=field, field_info=field_info)
                 else:
                     observation.valueString = getattr(self, field)
+
+            # if we have component - remove value[x]
+            if observation.component:
+                if hasattr(observation, 'valueInteger'):
+                    del observation.valueInteger
+                if hasattr(observation, 'valueQuantity'):
+                    del observation.valueQuantity
+                if hasattr(observation, 'valueString'):
+                    del observation.valueString
+
+            if more_codings:
+                observation.code.coding.extend(
+                    more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
 
             observations.append(observation)
 
