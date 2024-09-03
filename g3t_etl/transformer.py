@@ -537,15 +537,20 @@ class FHIRTransformer(BaseModel):
                 continue
 
             # this is when we want to create an observation for each attribute in the row
+            identifier = None
             if not observation_identifier:
-                identifier = self.observation_identifier(field, focus, subject)
-                if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
-                    value = getattr(self, field)
+                if observation_components:
+                    identifier = self.observation_identifier(field=None, focus=focus, subject=subject)
+                else:
+                    identifier = self.observation_identifier(field, focus, subject)
+                    if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
+                        value = getattr(self, field)
                     # this is when we want to create an observation all attributes in the row
-                    identifier = self.observation_identifier(value, focus, subject)
+                        identifier = self.observation_identifier(value, focus, subject)
             else:
                 identifier = observation_identifier
 
+            assert identifier, f"Can't proceed, Observation with focus: {focus} is missing Identifier."
             id_ = self.mint_id(identifier=identifier, resource_type='Observation')
             more_codings = additional_observation_codings(field_info)
 
@@ -664,7 +669,11 @@ class FHIRTransformer(BaseModel):
     def observation_identifier(self, field, focus, subject):
         subject_identifier = self._helper.get_official_identifier(subject).value
         focus_identifier = self._helper.get_official_identifier(focus).value
-        identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
+        if field:
+            identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
+        else:
+            # component dependent
+            identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}")
         return identifier
 
     def to_quantity(self, field_info: FieldInfo, field=None, value=None) -> dict:
