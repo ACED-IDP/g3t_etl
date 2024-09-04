@@ -539,16 +539,17 @@ class FHIRTransformer(BaseModel):
             # this is when we want to create an observation for each attribute in the row
             identifier = None
             if not observation_identifier:
-                if observation_components:
-                    identifier = self.observation_identifier(field=None, focus=focus, subject=subject)
-                else:
-                    identifier = self.observation_identifier(field, focus, subject)
-                    if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
-                        value = getattr(self, field)
+
+                identifier = self.observation_identifier(field, focus, subject)
+                if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
+                    value = getattr(self, field)
                     # this is when we want to create an observation all attributes in the row
-                        identifier = self.observation_identifier(value, focus, subject)
+                    identifier = self.observation_identifier(value, focus, subject)
             else:
                 identifier = observation_identifier
+
+            if observation_components:
+                identifier = self.observation_identifier(field=None, focus=focus, subject=subject)
 
             assert identifier, f"Can't proceed, Observation with focus: {focus} is missing Identifier."
             id_ = self.mint_id(identifier=identifier, resource_type='Observation')
