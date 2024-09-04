@@ -506,6 +506,7 @@ class FHIRTransformer(BaseModel):
         observation_code = None
         observation = None
         components = []
+        observation_focus = None
 
         for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
             if not field_info.json_schema_extra:
@@ -557,17 +558,14 @@ class FHIRTransformer(BaseModel):
             else:
                 component.valueString = getattr(self, component_field)
 
-            # if not observation.component:
-            #     observation.component = []
-            # observation.component.append(component)
-
             if component:
                 components.append(component)
+                if component_field_info.json_schema_extra['observation_subject'] == focus.resource_type:
+                    observation_focus = [self.to_reference(focus)] # should be the same focus reference for the component use-case
 
         focus_reference = self.to_reference(focus)
-        # TODO: generalize focus_reference.reference
-        if components and "Specimen" in focus_reference.reference:
-            print("Focus Reference: ", focus_reference)
+
+        if components and observation_focus:
             code = None
             identifier = self.observation_identifier(field=None, focus=focus, subject=subject)
             assert identifier, f"Can't proceed, Observation with focus: {focus} is missing Identifier."
@@ -582,7 +580,6 @@ class FHIRTransformer(BaseModel):
                 else:
                     # print("empty or invalid 'code' field detected, assigning default:", observation_dict['code'])
                     if "Specimen" in focus_reference.reference:
-                        print("this should be focus", focus_reference.reference)
                         code = self.populate_codeable_concept(system="https://loinc.org/",
                                                               code="68992-7",
                                                               display="Specimen-related information panel")
@@ -600,7 +597,7 @@ class FHIRTransformer(BaseModel):
             observation.id = id_
             observation.identifier = [identifier]
             observation.subject = self.to_reference(subject)
-            observation.focus = [focus_reference]
+            observation.focus = observation_focus
             observation.component = components
 
             observations.append(observation)
