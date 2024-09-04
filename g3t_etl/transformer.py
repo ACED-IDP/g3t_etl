@@ -2,6 +2,7 @@
 import inspect
 import logging
 import os
+import orjson
 import pathlib
 import shutil
 import sys
@@ -503,6 +504,9 @@ class FHIRTransformer(BaseModel):
         observation_components = {}
         observation_identifier = None
         observation_code = None
+        observation = None
+        components = []
+
         for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
             if not field_info.json_schema_extra:
                 continue
@@ -527,41 +531,48 @@ class FHIRTransformer(BaseModel):
                     display = 'Unknown'
                 observation_code = self.populate_codeable_concept(code=underscored_code, display=display)
 
+        for component_field, component_field_info in observation_components.items():
+            component_value = getattr(self, component_field)
+            underscored_component_field = inflection.underscore(component_field)
+            component = ObservationComponent(
+                code={
+                    'coding': [
+                        {
+                            'system': self._helper.system,
+                            'code': underscored_component_field,
+                            'display': component_field,
+                        }
+                    ],
+                    'text': component_field
+                }
+            )
 
-        # for all attributes in raw record ...
-        for field, field_info in observation_fields.items():
-
-            # that are not null ...
-            value = getattr(self, field)
-            if not value:
-                continue
-
-            # this is when we want to create an observation for each attribute in the row
-            identifier = None
-            if not observation_identifier:
-
-                identifier = self.observation_identifier(field, focus, subject)
-                if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
-                    value = getattr(self, field)
-                    # this is when we want to create an observation all attributes in the row
-                    identifier = self.observation_identifier(value, focus, subject)
+            # TODO value[x]
+            field_type = str(component_field_info.annotation)
+            if 'int' in field_type:
+                component.valueInteger = getattr(self, component_field)
+            elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
+                component.valueQuantity = self.to_quantity(field=component_field, field_info=component_field_info,
+                                                           value=component_value)
             else:
-                identifier = observation_identifier
+                component.valueString = getattr(self, component_field)
 
-            if observation_components:
-                identifier = self.observation_identifier(field=None, focus=focus, subject=subject)
+            # if not observation.component:
+            #     observation.component = []
+            # observation.component.append(component)
 
+            if component:
+                components.append(component)
+
+        focus_reference = self.to_reference(focus)
+        # TODO: generalize focus_reference.reference
+        if components and "Specimen" in focus_reference.reference:
+            print("Focus Reference: ", focus_reference)
+            code = None
+            identifier = self.observation_identifier(field=None, focus=focus, subject=subject)
             assert identifier, f"Can't proceed, Observation with focus: {focus} is missing Identifier."
             id_ = self.mint_id(identifier=identifier, resource_type='Observation')
-            more_codings = additional_observation_codings(field_info)
-
-            try:
-                observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
-            except Exception as e:
-                observation_dict = self.render_template(f"Observation.yaml.jinja")
-
-            code = None
-            focus_reference = self.to_reference(focus)
+            observation_dict = self.render_template(f"Observation.yaml.jinja")
 
             if 'code' in observation_dict and not observation_code:
                 coding_list = observation_dict['code'].get('coding', [])
@@ -571,6 +582,7 @@ class FHIRTransformer(BaseModel):
                 else:
                     # print("empty or invalid 'code' field detected, assigning default:", observation_dict['code'])
                     if "Specimen" in focus_reference.reference:
+                        print("this should be focus", focus_reference.reference)
                         code = self.populate_codeable_concept(system="https://loinc.org/",
                                                               code="68992-7",
                                                               display="Specimen-related information panel")
@@ -579,26 +591,6 @@ class FHIRTransformer(BaseModel):
                                                               code="68992-7",
                                                               display="Specimen-related information panel")
                     del observation_dict['code']
-
-            if not code:
-                if not observation_code and focus:
-                    # Default code: adding general required Observation code based on the focus of Observation
-                    if "Specimen" in focus_reference.reference:
-                        code = self.populate_codeable_concept(system="https://loinc.org/",
-                                                              code="68992-7",
-                                                              display="Specimen-related information panel")
-                    elif "Patient" in focus_reference.reference:
-                        code = self.populate_codeable_concept(system="https://loinc.org/",
-                                                              code="68992-7",
-                                                              display="Specimen-related information panel")
-                elif not observation_code and not focus:
-                    underscored_code = inflection.underscore(field)
-                    display = field_info.description
-                    if not display:
-                        display = value
-                    code = self.populate_codeable_concept(code=underscored_code, display=display)
-                else:
-                    code = observation_code
 
             observation = Observation(
                 **observation_dict,
@@ -609,61 +601,115 @@ class FHIRTransformer(BaseModel):
             observation.identifier = [identifier]
             observation.subject = self.to_reference(subject)
             observation.focus = [focus_reference]
-
-            for component_field, component_field_info in observation_components.items():
-                component_value = getattr(self, component_field)
-                underscored_component_field = inflection.underscore(component_field)
-                component = ObservationComponent(
-                    code={
-                        'coding': [
-                            {
-                                'system': self._helper.system,
-                                'code': underscored_component_field,
-                                'display': component_field,
-                            }
-                        ],
-                        'text': component_field
-                    }
-                )
-
-                # TODO value[x]
-                field_type = str(component_field_info.annotation)
-                if 'int' in field_type:
-                    component.valueInteger = getattr(self, component_field)
-                elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
-                    component.valueQuantity = self.to_quantity(field=component_field, field_info=component_field_info, value=component_value)
-                else:
-                    component.valueString = getattr(self, component_field)
-
-                if not observation.component:
-                    observation.component = []
-                observation.component.append(component)
-
-            # if there are components, then the value[x] is not set
-            if not observation.component:
-                # value[x] the annotations are often decorated with Optional, so cast to string and check for the type
-                field_type = str(field_info.annotation)
-                if 'int' in field_type:
-                    observation.valueInteger = getattr(self, field)
-                elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
-                    observation.valueQuantity = self.to_quantity(field=field, field_info=field_info)
-                else:
-                    observation.valueString = getattr(self, field)
-
-            # if we have component - remove value[x]
-            if observation.component:
-                if hasattr(observation, 'valueInteger'):
-                    del observation.valueInteger
-                if hasattr(observation, 'valueQuantity'):
-                    del observation.valueQuantity
-                if hasattr(observation, 'valueString'):
-                    del observation.valueString
-
-            if more_codings:
-                observation.code.coding.extend(
-                    more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
+            observation.component = components
 
             observations.append(observation)
+
+        if not components:
+            # for all attributes in raw record ...
+            for field, field_info in observation_fields.items():
+
+                # that are not null ...
+                value = getattr(self, field)
+                if not value:
+                    continue
+
+                # this is when we want to create an observation for each attribute in the row
+                identifier = None
+                if not observation_identifier:
+
+                    identifier = self.observation_identifier(field, focus, subject)
+                    if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
+                        value = getattr(self, field)
+                        # this is when we want to create an observation all attributes in the row
+                        identifier = self.observation_identifier(value, focus, subject)
+                else:
+                    identifier = observation_identifier
+
+                id_ = self.mint_id(identifier=identifier, resource_type='Observation')
+                more_codings = additional_observation_codings(field_info)
+
+                try:
+                    observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
+                except Exception as e:
+                    observation_dict = self.render_template(f"Observation.yaml.jinja")
+
+                code = None
+                focus_reference = self.to_reference(focus)
+
+                if 'code' in observation_dict and not observation_code:
+                    coding_list = observation_dict['code'].get('coding', [])
+                    if coding_list or observation_dict['code'].get('text'):
+                        code = observation_dict['code']
+                        del observation_dict['code']
+                    else:
+                        # print("empty or invalid 'code' field detected, assigning default:", observation_dict['code'])
+                        if "Specimen" in focus_reference.reference:
+                            code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                                  code="68992-7",
+                                                                  display="Specimen-related information panel")
+                        elif "Patient" in focus_reference.reference:
+                            code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                                  code="68992-7",
+                                                                  display="Specimen-related information panel")
+                        del observation_dict['code']
+
+                if not code:
+                    if not observation_code and focus:
+                        # Default code: adding general required Observation code based on the focus of Observation
+                        if "Specimen" in focus_reference.reference:
+                            code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                                  code="68992-7",
+                                                                  display="Specimen-related information panel")
+                        elif "Patient" in focus_reference.reference:
+                            code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                                  code="68992-7",
+                                                                  display="Specimen-related information panel")
+                    elif not observation_code and not focus:
+                        underscored_code = inflection.underscore(field)
+                        display = field_info.description
+                        if not display:
+                            display = value
+                        code = self.populate_codeable_concept(code=underscored_code, display=display)
+                    else:
+                        code = observation_code
+
+                observation = Observation(
+                    **observation_dict,
+                    code=code
+                )
+
+                observation.id = id_
+                observation.identifier = [identifier]
+                observation.subject = self.to_reference(subject)
+                observation.focus = [focus_reference]
+
+                # if there are components, then the value[x] is not set
+                if not observation.component:
+                    # value[x] the annotations are often decorated with Optional, so cast to string and check for the type
+                    field_type = str(field_info.annotation)
+                    if 'int' in field_type:
+                        observation.valueInteger = getattr(self, field)
+                    elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
+                        observation.valueQuantity = self.to_quantity(field=field, field_info=field_info)
+                    else:
+                        observation.valueString = getattr(self, field)
+
+                # if we have component - remove value[x]
+                if observation.component:
+                    if hasattr(observation, 'valueInteger'):
+                        del observation.valueInteger
+                    if hasattr(observation, 'valueQuantity'):
+                        del observation.valueQuantity
+                    if hasattr(observation, 'valueString'):
+                        del observation.valueString
+
+                if more_codings:
+                    observation.code.coding.extend(
+                        more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
+
+            if observation:
+                observations.append(observation)
 
         return observations
 
