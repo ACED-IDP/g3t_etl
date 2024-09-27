@@ -310,11 +310,22 @@ class FHIRTransformer(BaseModel):
         assert 'identifier' in specimen_mapping, f"Specimen must have an identifier {self}"
         if not specimen_mapping['identifier'].value:
             return None
-        identifier = self.populate_identifier(value=specimen_mapping['identifier'].value)
 
+        specimen_identifier = []
+        identifier = None
+        if isinstance(specimen_mapping['identifier'].value, list):
+            # pick the identifier with same system - temporary fix
+            identifier = [_i for _i in specimen_mapping['identifier'].value if _i.system == self._helper.system][0]
+            specimen_identifier = specimen_mapping['identifier'].value
+        else:
+            identifier = self.populate_identifier(value=specimen_mapping['identifier'].value)
+            specimen_identifier.append(identifier)
+
+        assert identifier, f"Identifier must be created before Specimen {self}"
         assert patient, f"Patient must be created before Specimen {self}"
+
         specimen = self.template_specimen(subject=self.to_reference(patient))
-        specimen.identifier = [identifier]
+        specimen.identifier = specimen_identifier
         specimen.id = self.mint_id(identifier=identifier, resource_type='Specimen')
 
         practioner = next(iter([_ for _ in generated_resources if _.resource_type == 'Practitioner']), None)
@@ -712,7 +723,7 @@ class FHIRTransformer(BaseModel):
 
     def observation_identifier(self, field, focus, subject):
         subject_identifier = self._helper.get_official_identifier(subject).value
-        focus_identifier = self._helper.get_official_identifier(focus).value
+        focus_identifier = self._helper.get_official_identifier(focus, system=self._helper.system).value
         if field:
             identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
         else:
