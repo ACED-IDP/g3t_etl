@@ -722,7 +722,7 @@ class FHIRTransformer(BaseModel):
 
     def observation_identifier(self, field, focus, subject):
         subject_identifier = self._helper.get_official_identifier(subject).value
-        focus_identifier = self._helper.get_official_identifier(focus, system=self._helper.system).value
+        focus_identifier = self._helper.get_official_identifier(focus).value
         if field:
             identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
         else:
