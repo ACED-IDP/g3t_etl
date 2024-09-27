@@ -90,14 +90,8 @@ class TransformerHelper(IdMinter):
         return _
 
     @classmethod
-    def get_official_identifier(cls, resource: Resource, system: str = None) -> Identifier:
+    def get_official_identifier(cls, resource: Resource) -> Identifier:
         """Get the official identifier from a fhir resource."""
-        #print("RESOURCE: ", resource, "TYPE: ", type(resource))
-        # if isinstance(resource.identifier, list) and len(resource.identifier) > 1:
-        #    print(resource.identifier[0].use, IDENTIFIER_USE)
-        #    _ = [_ident for _ident in resource.identifier if (_ident.system == system)][0]
-        #    print(_, "<<<< IDENTIFIER ")
-        #else:
         _ = next(iter(_ for _ in resource.identifier if _.use == IDENTIFIER_USE), None)
         assert _, f"Could not find {IDENTIFIER_USE} identifier for {resource}"
         return _

@@ -314,7 +314,6 @@ class FHIRTransformer(BaseModel):
         specimen_identifier = []
         identifier = None
         if isinstance(specimen_mapping['identifier'].value, list):
-            # pick the identifier with same system - temporary fix
             identifier = [_i for _i in specimen_mapping['identifier'].value if _i.system == self._helper.system][0]
             specimen_identifier = specimen_mapping['identifier'].value
         else:
