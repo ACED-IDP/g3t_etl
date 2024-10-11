@@ -28,6 +28,10 @@ from fhir.resources.researchstudy import ResearchStudy
 from fhir.resources.researchsubject import ResearchSubject
 from fhir.resources.resource import Resource
 from fhir.resources.specimen import Specimen, SpecimenCollection
+from fhir.resources.substance import Substance
+from fhir.resources.substancedefinition import SubstanceDefinition, SubstanceDefinitionStructure, \
+    SubstanceDefinitionStructureRepresentation, SubstanceDefinitionName
+from fhir.resources.codeableconcept import CodeableConcept
 from jinja2 import Environment, FileSystemLoader, select_autoescape, PackageLoader
 from pydantic import ConfigDict
 from pydantic.fields import FieldInfo
@@ -186,7 +190,10 @@ class FHIRTransformer(BaseModel):
             else:
                 assert False, f"unknown mapping {(k, v)}"
         # print(f"FHIRTransformer init id: {id(self)}",  f"_helper:{self._helper}", f"_template_helper: {self._template_helper}")
-
+        self.SYSTEM_SNOME = 'http://snomed.info/sct'
+        self.SYSTEM_LOINC = 'http://loinc.org'
+        self.SYSTEM_chEMBL = 'https://www.ebi.ac.uk/chembl'
+        
     def render_template(self, template_name: str) -> dict:
         """Render a template, populated with transformer's values."""
         # dispatch to template_helper
@@ -462,6 +469,42 @@ class FHIRTransformer(BaseModel):
             subject={'reference': f"Patient/{patient.id}"}
         )
         return research_subject
+
+    def create_substance_definition(self, compound_name: str, representations: list) -> SubstanceDefinition:
+        sub_def_identifier = Identifier(**{"system": self.SYSTEM_chEMBL, "value": compound_name, "use": "official"})
+        sub_def_id = self.mint_id(identifier=sub_def_identifier, resource_type="SubstanceDefinition",
+                                  project_id=self.project_id,
+                                  namespace=self.NAMESPACE_HTAN)
+
+        return SubstanceDefinition(**{"id": sub_def_id,
+                                      "identifier": [sub_def_identifier],
+                                      "structure": SubstanceDefinitionStructure(**{"representation": representations}),
+                                      "name": [SubstanceDefinitionName(**{"name": compound_name})]
+                                      })
+
+    def create_substance(self, compound_name: str, substance_definition: SubstanceDefinition) -> Substance:
+        code = None
+        if substance_definition:
+            code = CodeableReference(
+                **{"concept": CodeableConcept(**{"coding": [
+                    {"code": compound_name, "system": "/".join([self.SYSTEM_chEMBL, "compound_name"]),
+                     "display": compound_name}]}),
+                   "reference": Reference(**{"reference": f"SubstanceDefinition/{substance_definition.id}"})})
+
+        sub_identifier = Identifier(
+            **{"system": self.SYSTEM_chEMBL, "value": compound_name, "use": "official"})
+        sub_id = self.mint_id(identifier=sub_identifier, resource_type="Substance",
+                              project_id=self.project_id,
+                              namespace=self.NAMESPACE_HTAN)
+
+        return Substance(**{"id": sub_id,
+                            "identifier": [sub_identifier],
+                            "instance": True,  # place-holder
+                            "category": [CodeableConcept(**{"coding": [{"code": "drug",
+                                                                        "system": "http://terminology.hl7.org/CodeSystem/substance-category",
+                                                                        "display": "Drug or Medicament"}]})],
+                            "code": code})
+
 
     def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
         """Default transformation, call this method if you don't want to implement your own transform."""
