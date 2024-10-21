@@ -20,6 +20,7 @@ from fhir.resources.fhirtypes import CodeableConceptType
 from fhir.resources.identifier import Identifier
 from fhir.resources.observation import Observation, ObservationComponent
 from fhir.resources.patient import Patient
+from fhir.resources.group import Group, GroupMember
 from fhir.resources.practitioner import Practitioner
 from fhir.resources.organization import Organization
 from fhir.resources.procedure import Procedure
@@ -277,6 +278,10 @@ class FHIRTransformer(BaseModel):
 
         organization_mapping = self.resource_mapping['Organization']
         assert 'identifier' in organization_mapping, f"Organization must have an identifier {self}"
+
+        if not organization_mapping['identifier'].value:
+            return None
+
         identifier = self.populate_identifier(value=organization_mapping['identifier'].value)
         organization = self.template_organization()
         organization.id = self.mint_id(identifier=identifier, resource_type='Organization')
@@ -290,13 +295,33 @@ class FHIRTransformer(BaseModel):
 
         return organization
 
-    def create_patient(self, generated_resources: list[Resource]) -> Patient | None:
+    def create_patient(self, generated_resources: list[Resource]) -> Patient | Group | None:
         """Create a patient."""
         if 'Patient' not in self.resource_mapping:
             return None
 
         patient_mapping = self.resource_mapping['Patient']
         assert 'identifier' in patient_mapping, f"Patient must have an identifier {self}"
+
+        if "," in patient_mapping['identifier'].value:
+            patient_identifier_values = patient_mapping['identifier'].value.split(',')
+            patient_identifier_values = [x.strip() for x in patient_identifier_values]
+
+            members = []
+            for group_member_identifier in patient_identifier_values:
+                _gp_ident = self.populate_identifier(value=group_member_identifier)
+                patient_group_member = self.template_patient()
+                patient_group_member.id = self.mint_id(identifier=_gp_ident, resource_type='Patient') # we assume we only have patient groups atm
+                patient_group_member.identifier = [_gp_ident]
+                # self.create_patient([patient_group_member]) # create the patient in group
+                members.append(GroupMember(**{'entity': Reference(**{"reference": f"Patient/{patient_group_member.id}"})}))
+
+            group_identifier = self.populate_identifier(value=patient_mapping['identifier'].value)
+            group_id = self.mint_id(identifier=group_identifier, resource_type='Group')
+            group = Group(**{'id': group_id, "identifier": [group_identifier], "membership": 'definitional',
+                             'member': members, "type": "person"})
+            return group
+
         identifier = self.populate_identifier(value=patient_mapping['identifier'].value)
         patient = self.template_patient()
         patient.id = self.mint_id(identifier=identifier, resource_type='Patient')
@@ -310,7 +335,7 @@ class FHIRTransformer(BaseModel):
 
         return patient
 
-    def create_specimen(self, patient: Patient | None, generated_resources: list[Resource]) -> Specimen | None:
+    def create_specimen(self, patient: Patient | None, generated_resources: list[Resource], group: Group | None) -> Specimen | None:
         """Create a specimen."""
         if 'Specimen' not in self.resource_mapping:
             return None
@@ -527,7 +552,7 @@ class FHIRTransformer(BaseModel):
             research_subject = self.create_research_subject(patient, research_study)
             generated_resources.extend([patient, research_subject])
 
-        specimen = self.create_specimen(patient, generated_resources)
+        specimen = self.create_specimen(patient, generated_resources, group=None)
         if specimen:
             generated_resources.append(specimen)
 
@@ -954,7 +979,6 @@ def register() -> None:
     factory.register(
         transformer=TRANSFORMER_CLASS
     )
-
 '''
 
 
