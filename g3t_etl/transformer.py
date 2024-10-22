@@ -46,9 +46,11 @@ logger = logging.getLogger(__name__)
 
 class TemplateHelper:
     """Helper class for templates. Loads default templates and jinja environment."""
+
     def __init__(self, template_dir: pathlib.Path):
         self.template_dir: pathlib.Path = template_dir
-        self.jinja_env: Environment = Environment(loader=FileSystemLoader(self.template_dir), autoescape=select_autoescape())
+        self.jinja_env: Environment = Environment(loader=FileSystemLoader(self.template_dir),
+                                                  autoescape=select_autoescape())
         logger.info(f"Loaded {len(self.jinja_env.list_templates())} templates from {self.template_dir}")
 
     def render_template(self, template_name: str, transformer: 'FHIRTransformer') -> dict:
@@ -70,17 +72,15 @@ if pathlib.Path('.g3t/config.yaml').exists():
         _project_id = config['gen3']['project_id']
 else:
     if 'G3T_PROJECT_ID' not in os.environ:
-        logger.warning(f"No .g3t/config.yaml found. See `g3t init` or `g3t clone`.  Proceeding with project_id {_project_id}.")
+        logger.warning(
+            f"No .g3t/config.yaml found. See `g3t init` or `g3t clone`.  Proceeding with project_id {_project_id}.")
     else:
         _project_id = os.environ['G3T_PROJECT_ID']
 
 DEFAULT_HELPER = TransformerHelper(project_id=_project_id)
 
-
 transformers: list[Callable[..., Transformer]] = []
 default_dictionary_path: None
-
-
 
 
 def default_transformer():
@@ -186,9 +186,11 @@ class FHIRTransformer(BaseModel):
                     self._observation_mapping.append(
                         FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
                 else:
-                    self._resource_mapping[resource_type][_] = FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)})
+                    self._resource_mapping[resource_type][_] = FieldMappingInstance(
+                        **{'field_info': v, 'field': k, 'value': getattr(self, k)})
             elif resource_type == 'Observation':
-                self._observation_mapping.append(FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
+                self._observation_mapping.append(
+                    FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
             else:
                 assert False, f"unknown mapping {(k, v)}"
         # print(f"FHIRTransformer init id: {id(self)}",  f"_helper:{self._helper}", f"_template_helper: {self._template_helper}")
@@ -279,16 +281,31 @@ class FHIRTransformer(BaseModel):
         organization_mapping = self.resource_mapping['Organization']
         assert 'identifier' in organization_mapping, f"Organization must have an identifier {self}"
 
-        if not organization_mapping['identifier'].value:
+        _identifier_value = organization_mapping['identifier'].value
+
+        if hasattr(_identifier_value, 'value') and _identifier_value.value:
+            _identifier_value = _identifier_value.value
+        elif not isinstance(_identifier_value, str):
             return None
 
-        identifier = self.populate_identifier(value=organization_mapping['identifier'].value)
-        organization = self.template_organization()
-        organization.id = self.mint_id(identifier=identifier, resource_type='Organization')
-        organization.identifier = [identifier]
+        _part_of = None
+        program_organization = None
+        if organization_mapping['partOf'].value:
+            program_identifier = self.populate_identifier(value=organization_mapping['partOf'].value)
+            program_id = self.mint_id(identifier=program_identifier, resource_type='Organization')
+            _part_of = Reference(**{"reference": f"Organization/{program_id}"})
+
+            program_organization = Organization(**{"id": self.mint_id(identifier=program_identifier, resource_type='Organization'),
+                                                   "identifier": [program_identifier],
+                                                   "partOf": None}) # requires a lot of code change to return lits[Organization]
+
+        identifier = self.populate_identifier(value=_identifier_value)
+        organization = Organization(**{"id": self.mint_id(identifier=identifier, resource_type='Organization'),
+                                       "identifier": [identifier],
+                                       "partOf": _part_of})
 
         for field, info in organization_mapping.items():
-            if field == 'identifier':
+            if field == 'identifier' or field == 'partOf':
                 # already processed this
                 continue
             setattr(organization, field, info['value'])
@@ -311,10 +328,12 @@ class FHIRTransformer(BaseModel):
             for group_member_identifier in patient_identifier_values:
                 _gp_ident = self.populate_identifier(value=group_member_identifier)
                 patient_group_member = self.template_patient()
-                patient_group_member.id = self.mint_id(identifier=_gp_ident, resource_type='Patient') # we assume we only have patient groups atm
+                patient_group_member.id = self.mint_id(identifier=_gp_ident,
+                                                       resource_type='Patient')  # we assume we only have patient groups atm
                 patient_group_member.identifier = [_gp_ident]
                 # self.create_patient([patient_group_member]) # create the patient in group
-                members.append(GroupMember(**{'entity': Reference(**{"reference": f"Patient/{patient_group_member.id}"})}))
+                members.append(
+                    GroupMember(**{'entity': Reference(**{"reference": f"Patient/{patient_group_member.id}"})}))
 
             group_identifier = self.populate_identifier(value=patient_mapping['identifier'].value)
             group_id = self.mint_id(identifier=group_identifier, resource_type='Group')
@@ -335,7 +354,8 @@ class FHIRTransformer(BaseModel):
 
         return patient
 
-    def create_specimen(self, patient: Patient | None, generated_resources: list[Resource], group: Group | None) -> Specimen | None:
+    def create_specimen(self, patient: Patient | None, generated_resources: list[Resource],
+                        group: Group | None) -> Specimen | None:
         """Create a specimen."""
         if 'Specimen' not in self.resource_mapping:
             return None
@@ -360,13 +380,13 @@ class FHIRTransformer(BaseModel):
         specimen.identifier = specimen_identifier
         specimen.id = self.mint_id(identifier=identifier, resource_type='Specimen')
 
-        practioner = next(iter([_ for _ in generated_resources if _.resource_type == 'Practitioner']), None)
+        practitioner = next(iter([_ for _ in generated_resources if _.resource_type == 'Practitioner']), None)
         organization = next(iter([_ for _ in generated_resources if _.resource_type == 'Organization']), None)
 
-        if practioner:
+        if practitioner:
             if not specimen.collection:
                 specimen.collection = SpecimenCollection()
-            specimen.collection.collector = self.to_reference(practioner)
+            specimen.collection.collector = self.to_reference(practitioner)
         elif organization:
             if not specimen.collection:
                 specimen.collection = SpecimenCollection()
@@ -468,7 +488,8 @@ class FHIRTransformer(BaseModel):
             if 'procedure_identifier' not in self.logged_already:
                 logger.warning(f"Procedure SHOULD have an identifier {self}, creating from patient identifier")
                 self.logged_already.append('procedure_identifier')
-            identifier = self.populate_identifier(value=patient.identifier[0].value + '/Procedure/' + procedure_mapping['code'].value)
+            identifier = self.populate_identifier(
+                value=patient.identifier[0].value + '/Procedure/' + procedure_mapping['code'].value)
         else:
             identifier = self.populate_identifier(value=procedure_mapping['identifier'].value)
 
@@ -531,7 +552,6 @@ class FHIRTransformer(BaseModel):
                                                                         "display": "Drug or Medicament"}]})],
                             "code": code})
 
-
     def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
         """Default transformation, call this method if you don't want to implement your own transform."""
 
@@ -593,7 +613,8 @@ class FHIRTransformer(BaseModel):
             if 'observation_subject' in field_info.json_schema_extra:
                 if field_info.json_schema_extra['observation_subject'] == focus.resource_type:
                     observation_fields[field] = field_info
-            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.component':
+            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra[
+                'fhir_resource_type'] == 'Observation.component':
                 observation_components[field] = field_info
 
             # if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
@@ -601,7 +622,8 @@ class FHIRTransformer(BaseModel):
             #     # this is when we want to create an observation all attributes in the row
             #     identifier = self.observation_identifier(value, focus, subject)
 
-            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.code':
+            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra[
+                'fhir_resource_type'] == 'Observation.code':
                 value = getattr(self, field)
                 underscored_code = inflection.underscore(field)
                 display = field_info.description
@@ -640,7 +662,8 @@ class FHIRTransformer(BaseModel):
             if component:
                 components.append(component)
                 if component_field_info.json_schema_extra['observation_subject'] == focus.resource_type:
-                    observation_focus = [self.to_reference(focus)] # should be the same focus reference for the component use-case
+                    observation_focus = [
+                        self.to_reference(focus)]  # should be the same focus reference for the component use-case
 
         focus_reference = self.to_reference(focus)
 
@@ -695,7 +718,8 @@ class FHIRTransformer(BaseModel):
                 if not observation_identifier:
 
                     identifier = self.observation_identifier(field, focus, subject)
-                    if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
+                    if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra[
+                        'fhir_resource_type'] == 'Observation.identifier':
                         value = getattr(self, field)
                         # this is when we want to create an observation all attributes in the row
                         identifier = self.observation_identifier(value, focus, subject)
@@ -905,6 +929,8 @@ def generate_templates(target_template_dir: pathlib.Path, overwrite: bool = Fals
             click.secho(f"Created {target_template_path}", fg='green', file=sys.stderr)
 
     #  TODO - dynamically generate observation templates by loading the pydantic models
+
+
 #     transformer = cls()
 #     for _ in transformer.observation_mapping:
 #         target_template_path = target_template_dir / f"Observation-{_.field}.yaml.jinja"
