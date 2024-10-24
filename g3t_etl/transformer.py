@@ -295,7 +295,7 @@ class FHIRTransformer(BaseModel):
             program_id = self.mint_id(identifier=program_identifier, resource_type='Organization')
             _part_of = Reference(**{"reference": f"Organization/{program_id}"})
 
-            program_organization = Organization(**{"id": self.mint_id(identifier=program_identifier, resource_type='Organization'),
+            program_organization = Organization(**{"id": program_id,
                                                    "identifier": [program_identifier],
                                                    "partOf": None}) # requires a lot of code change to return lits[Organization]
 
@@ -367,6 +367,9 @@ class FHIRTransformer(BaseModel):
         specimen_identifier = []
         identifier = None
         if isinstance(specimen_mapping['identifier'].value, list):
+            # case where there are multiple specimens associated with a record
+            # if len(specimen_mapping['identifier'].value) > 1:
+                # print(specimen_mapping['identifier'].value)s
             identifier = [_i for _i in specimen_mapping['identifier'].value if _i.system == self._helper.system][0]
             specimen_identifier = specimen_mapping['identifier'].value
         else:
@@ -606,12 +609,29 @@ class FHIRTransformer(BaseModel):
         observation = None
         components = []
         observation_focus = None
+        focus_resource_type = None
+        resource_type = None
 
         for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
             if not field_info.json_schema_extra:
                 continue
             if 'observation_subject' in field_info.json_schema_extra:
-                if field_info.json_schema_extra['observation_subject'] == focus.resource_type:
+                if isinstance(focus, list):
+                    resource_type = []
+                    for focus_item in focus:
+                        resource_type.append(focus_item.resource_type)
+                    if len(list(set(resource_type))) == 1 and resource_type[0] == field_info.json_schema_extra['observation_subject']:
+                        focus_resource_type = field_info.json_schema_extra['observation_subject']
+                else:
+                    focus_resource_type = focus.resource_type
+                if focus_resource_type == None and isinstance(focus, list):
+                    for focus_item in focus:
+                        resource_type.append(focus_item.resource_type)
+                    if len(list(set(resource_type))) == 1:
+                        focus_resource_type = resource_type[0]
+                    elif focus:
+                        focus_resource_type = focus[0].resource_type # temp solution
+                if field_info.json_schema_extra['observation_subject'] == focus_resource_type:
                     observation_fields[field] = field_info
             if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra[
                 'fhir_resource_type'] == 'Observation.component':
@@ -661,11 +681,16 @@ class FHIRTransformer(BaseModel):
 
             if component:
                 components.append(component)
-                if component_field_info.json_schema_extra['observation_subject'] == focus.resource_type:
-                    observation_focus = [
-                        self.to_reference(focus)]  # should be the same focus reference for the component use-case
-
-        focus_reference = self.to_reference(focus)
+                if isinstance(focus, list):
+                    observation_focus = [self.to_reference(_f) for _f in focus]
+                else:
+                    if component_field_info.json_schema_extra['observation_subject'] == focus.resource_type:
+                        observation_focus = [
+                            self.to_reference(focus)]  # should be the same focus reference for the component use-case
+        if isinstance(focus, list):
+            focus_reference = [self.to_reference(_f) for _f in focus]
+        else:
+            focus_reference = self.to_reference(focus)
 
         if components and observation_focus:
             code = None
@@ -815,7 +840,11 @@ class FHIRTransformer(BaseModel):
 
     def observation_identifier(self, field, focus, subject):
         subject_identifier = self._helper.get_official_identifier(subject).value
-        focus_identifier = self._helper.get_official_identifier(focus).value
+        if isinstance(focus, list):
+            focus_identifiers = [self._helper.get_official_identifier(_f).value for _f in focus]
+            focus_identifier = "-".join(focus_identifiers)
+        else:
+            focus_identifier = self._helper.get_official_identifier(focus).value
         if field:
             identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
         else:
