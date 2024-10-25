@@ -6,10 +6,12 @@ import orjson
 import pathlib
 import shutil
 import sys
+import sqlite3
+import pandas as pd
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Callable, ClassVar, NamedTuple
+from typing import Any, Callable, ClassVar, NamedTuple, Optional
 
 import click
 import inflection
@@ -32,7 +34,12 @@ from fhir.resources.specimen import Specimen, SpecimenCollection
 from fhir.resources.substance import Substance
 from fhir.resources.substancedefinition import SubstanceDefinition, SubstanceDefinitionStructure, \
     SubstanceDefinitionStructureRepresentation, SubstanceDefinitionName
+from fhir.resources.medication import Medication, MedicationIngredient
+from fhir.resources.medicationadministration import MedicationAdministration
 from fhir.resources.codeableconcept import CodeableConcept
+from fhir.resources.timing import Timing, TimingRepeat
+from fhir.resources.range import Range
+from fhir.resources.quantity import Quantity
 from fhir.resources import get_fhir_model_class
 from jinja2 import Environment, FileSystemLoader, select_autoescape, PackageLoader
 from pydantic import ConfigDict
@@ -42,6 +49,7 @@ from pydantic import BaseModel
 from g3t_etl import TransformerHelper, Transformer
 
 logger = logging.getLogger(__name__)
+CHEMBL_DB_PATH = "/Users/sanati/KCRB/g3t_etl/resources/chembl/chembl_34.db"
 
 
 class TemplateHelper:
@@ -297,7 +305,7 @@ class FHIRTransformer(BaseModel):
 
             program_organization = Organization(**{"id": program_id,
                                                    "identifier": [program_identifier],
-                                                   "partOf": None}) # requires a lot of code change to return lits[Organization]
+                                                   "partOf": None})  # requires a lot of code change to return lits[Organization]
 
         identifier = self.populate_identifier(value=_identifier_value)
         organization = Organization(**{"id": self.mint_id(identifier=identifier, resource_type='Organization'),
@@ -369,7 +377,7 @@ class FHIRTransformer(BaseModel):
         if isinstance(specimen_mapping['identifier'].value, list):
             # case where there are multiple specimens associated with a record
             # if len(specimen_mapping['identifier'].value) > 1:
-                # print(specimen_mapping['identifier'].value)s
+            # print(specimen_mapping['identifier'].value)s
             identifier = [_i for _i in specimen_mapping['identifier'].value if _i.system == self._helper.system][0]
             specimen_identifier = specimen_mapping['identifier'].value
         else:
@@ -520,11 +528,76 @@ class FHIRTransformer(BaseModel):
         )
         return research_subject
 
+    @staticmethod
+    def fetch_chembl_data(compounds: list, limit: int) -> list:
+        def get_chembl_compound_info(db_file_path: str, drug_names: list, _limit=limit) -> list:
+            """Query Chembl COMPOUND_RECORDS by COMPOUND_NAME for FHIR Substance"""
+            if len(drug_names) == 1:
+                _drug_names = tuple([x.upper() for x in [drug_names[0], drug_names[0]]])
+            else:
+                _drug_names = tuple([x.upper() for x in drug_names])
+
+            query = f"""
+            SELECT DISTINCT 
+                a.CHEMBL_ID,
+                c.STANDARD_INCHI,
+                c.CANONICAL_SMILES,
+                cr.COMPOUND_NAME
+            FROM 
+                MOLECULE_DICTIONARY as a
+            LEFT JOIN 
+                COMPOUND_STRUCTURES as c ON a.MOLREGNO = c.MOLREGNO
+            LEFT JOIN 
+                ACTIVITIES as p ON a.MOLREGNO = p.MOLREGNO
+            LEFT JOIN 
+                compound_records as cr ON a.MOLREGNO = cr.MOLREGNO
+            LEFT JOIN
+                source as sr ON cr.SRC_ID = sr.SRC_ID
+            WHERE cr.COMPOUND_NAME IN {_drug_names}
+            LIMIT {str(_limit)};
+            """
+            conn = sqlite3.connect(db_file_path)
+            cursor = conn.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+
+            conn.close()
+
+            return rows
+
+        def tuple_to_dict(keys, values):
+            return dict(zip(keys, values))
+
+        drug_compound_data = get_chembl_compound_info(db_file_path=CHEMBL_DB_PATH, drug_names=compounds)
+
+        key_info = ["CHEMBL_ID", "STANDARD_INCHI", "CANONICAL_SMILES", "COMPOUND_NAME"]
+        _dict_list = []
+        for item in drug_compound_data:
+            _dict_list.append(tuple_to_dict(key_info, item))
+        return _dict_list
+
+    @staticmethod
+    def create_substance_definition_representations(drug_data: list) -> list:
+        representations = []
+        for row in drug_data:
+            if 'STANDARD_INCHI' in row and row['STANDARD_INCHI'] is not None:
+                representations.append(SubstanceDefinitionStructureRepresentation(
+                    **{"representation": row['STANDARD_INCHI'],
+                       "format": CodeableConcept(**{"coding": [{"code": "InChI",
+                                                                "system": 'http://hl7.org/fhir/substance-representation-format',
+                                                                "display": "InChI"}]})}))
+
+            if 'CANONICAL_SMILES' in row and row['CANONICAL_SMILES'] is not None:
+                representations.append(SubstanceDefinitionStructureRepresentation(
+                    **{"representation": row['CANONICAL_SMILES'],
+                       "format": CodeableConcept(**{"coding": [{"code": "SMILES",
+                                                                "system": 'http://hl7.org/fhir/substance-representation-format',
+                                                                "display": "SMILES"}]})}))
+        return representations
+
     def create_substance_definition(self, compound_name: str, representations: list) -> SubstanceDefinition:
         sub_def_identifier = Identifier(**{"system": self.SYSTEM_chEMBL, "value": compound_name, "use": "official"})
-        sub_def_id = self.mint_id(identifier=sub_def_identifier, resource_type="SubstanceDefinition",
-                                  project_id=self.project_id,
-                                  namespace=self.NAMESPACE_HTAN)
+        sub_def_id = self.mint_id(identifier=sub_def_identifier, resource_type="SubstanceDefinition")
 
         return SubstanceDefinition(**{"id": sub_def_id,
                                       "identifier": [sub_def_identifier],
@@ -543,9 +616,7 @@ class FHIRTransformer(BaseModel):
 
         sub_identifier = Identifier(
             **{"system": self.SYSTEM_chEMBL, "value": compound_name, "use": "official"})
-        sub_id = self.mint_id(identifier=sub_identifier, resource_type="Substance",
-                              project_id=self.project_id,
-                              namespace=self.NAMESPACE_HTAN)
+        sub_id = self.mint_id(identifier=sub_identifier, resource_type="Substance")
 
         return Substance(**{"id": sub_id,
                             "identifier": [sub_identifier],
@@ -554,6 +625,134 @@ class FHIRTransformer(BaseModel):
                                                                         "system": "http://terminology.hl7.org/CodeSystem/substance-category",
                                                                         "display": "Drug or Medicament"}]})],
                             "code": code})
+
+    def create_medication(self, compound_name: Optional[str], treatment_type: Optional[str],
+                          _substance: Optional[Substance]) -> Medication:
+        code = None
+        med_identifier = None
+
+        if compound_name:
+            if ":" in compound_name:
+                compound_name.replace(":", "_")
+            code = CodeableConcept(**{"coding": [
+                {"code": compound_name, "system": "/".join([self.SYSTEM_chEMBL, "compound_name"]),
+                 "display": compound_name}]})
+
+            med_identifier = Identifier(
+                **{"system": self.SYSTEM_chEMBL, "value": compound_name, "use": "official"})
+        else:
+            if ":" in treatment_type:
+                treatment_type.replace(":", "_")
+
+            code = CodeableConcept(**{
+                "coding": [{"code": treatment_type,
+                            "system": "/".join([self._helper.system, "treatment_type"]),  # TODO: change
+                            "display": treatment_type}]})
+
+            med_identifier = Identifier(
+                **{"system": self._helper.system, "value": treatment_type, "use": "official"})
+
+        med_id = self.mint_id(identifier=med_identifier, resource_type="Medication")
+
+        ingredients = []
+        if _substance:
+            ingredients.append(MedicationIngredient(**{
+                "item": CodeableReference(
+                    **{"reference": Reference(**{"reference": f"Substance/{_substance.id}"})})}))
+
+        return Medication(**{"id": med_id,
+                             "identifier": [med_identifier],
+                             "code": code,
+                             "ingredient": ingredients})
+
+    def create_medication_administration(self, patient: Patient, generated_resources: list[Resource]) -> MedicationAdministration | None:
+        # if treatment type or drug name exists - make MedicationAdministration
+        # if treatment end index days exists, then status -> completed, else status is defined by user (matching fhir requirnments) or unknown
+        # if drug name is null, then Medication.code -> snomed_code: Unknown 261665006
+        # Medication.ingredient.item -> Substance.code -> SubstanceDefinition
+        # status, medication , subject are required by FHIR
+
+        assert patient, f"Medication Administration requires the patient information"
+
+        status = None
+        substance_definition = None
+        substance = None
+        medication = None
+        medication_code = None
+        index_end = None
+        index_start = None
+        reason = []
+
+        for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
+            # print("Field:", field)
+            # print("field_info: ", field_info.json_schema_extra)
+            if not field_info.json_schema_extra:
+                continue
+
+            # if not field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.medication" or not field_info.json_schema_extra['fhir_resource_type'] == "Medication.ingredient":
+            #     print(f"Patient: {patient.id} does not have FHIR mappings to define the medication that was administered.")
+            #     return
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.medication" or field_info.json_schema_extra['fhir_resource_type'] == "Medication.ingredient":
+                medication_name = getattr(self, field)
+                substance = None
+
+                _l = self.fetch_chembl_data([medication_name], limit=10) # TODO: do this once on all - have the user pass list - separate from medadmin
+                if _l:
+                    sdr = self.create_substance_definition_representations(_l)
+                    if sdr:
+                        sd = self.create_substance_definition(compound_name=medication_name, representations=sdr)
+                        if sd:
+                            substance = self.create_substance(compound_name=medication_name, substance_definition=sd)
+
+                medication = self.create_medication(compound_name=medication_name, treatment_type=None, _substance=substance)
+                if medication:
+                    print(medication.json())
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.reason.concept":
+                reason_value = getattr(self, field)
+                reason = [CodeableReference(
+                    **{"concept": CodeableConcept(**{"coding": [{"code": reason_value, "system": self._helper.system, "display": reason_value}]})})]
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.high":
+                index_end = getattr(self, field)
+                # TODO: need a more general way to define the concept of (index) Days to Treatment End
+                status = "completed"
+            elif field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.status":
+                status_value = getattr(self, field)
+                if status_value in ['in-progress', 'not-done', 'on-hold', 'completed', 'entered-in-error', 'stopped', 'unknown']:
+                    status = status_value
+                else:
+                    status = "unknown"
+
+            if field_info.json_schema_extra[
+                'fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.low":
+                index_start = getattr(self, field)
+
+        timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(**{"low": Quantity(**{"value": 0}), "high": Quantity(**{"value": 1})})})})# place holder - required by FHIR
+        if index_start and index_end:
+            timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(**{"low": Quantity(**{"value": int(index_start)}), "high": Quantity(**{"value": int(index_end)})})})})
+
+        medication_admin_identifier = Identifier(**{"system": self._helper.system, "use": "official",  "value": "-".join([patient.id, medication_name])})
+        medication_admin_id = self.mint_id(identifier=medication_admin_identifier, resource_type="MedicationAdministration")
+
+        medication_code = CodeableConcept(**{"coding": [{"code": medication_name,
+                                                             "system": self._helper.system,
+                                                             "display": medication_name}]})
+
+        medication_codeable_reference = CodeableReference(**{"concept": medication_code, "reference": Reference(
+            **{"reference": f"Medication/{medication.id}"})})
+
+        data = {"id": medication_admin_id,
+                "identifier": [medication_admin_identifier],
+                "status": status,
+                "medication": medication_codeable_reference,
+                "subject": {
+                    "reference": f"Patient/{patient.id}"
+                },
+                "occurenceTiming": timing}
+
+        return MedicationAdministration(**data)
 
     def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
         """Default transformation, call this method if you don't want to implement your own transform."""
@@ -587,12 +786,15 @@ class FHIRTransformer(BaseModel):
         if procedure:
             generated_resources.append(procedure)
 
+        self.create_medication_administration(patient, generated_resources)
+
         generated_observations = []
         for _ in generated_resources:
             observations = self.create_observations(subject=patient, focus=_)
             if observations:
                 generated_observations.extend(observations)
         generated_resources.extend(generated_observations)
+
 
         assert all([_ for _ in generated_resources]), "Should not have a None"
         return generated_resources
@@ -620,7 +822,8 @@ class FHIRTransformer(BaseModel):
                     resource_type = []
                     for focus_item in focus:
                         resource_type.append(focus_item.resource_type)
-                    if len(list(set(resource_type))) == 1 and resource_type[0] == field_info.json_schema_extra['observation_subject']:
+                    if len(list(set(resource_type))) == 1 and resource_type[0] == field_info.json_schema_extra[
+                        'observation_subject']:
                         focus_resource_type = field_info.json_schema_extra['observation_subject']
                 else:
                     focus_resource_type = focus.resource_type
@@ -630,7 +833,7 @@ class FHIRTransformer(BaseModel):
                     if len(list(set(resource_type))) == 1:
                         focus_resource_type = resource_type[0]
                     elif focus:
-                        focus_resource_type = focus[0].resource_type # temp solution
+                        focus_resource_type = focus[0].resource_type  # temp solution
                 if field_info.json_schema_extra['observation_subject'] == focus_resource_type:
                     observation_fields[field] = field_info
             if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra[
