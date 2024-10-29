@@ -35,8 +35,9 @@ from fhir.resources.substance import Substance
 from fhir.resources.substancedefinition import SubstanceDefinition, SubstanceDefinitionStructure, \
     SubstanceDefinitionStructureRepresentation, SubstanceDefinitionName
 from fhir.resources.medication import Medication, MedicationIngredient
-from fhir.resources.medicationadministration import MedicationAdministration
+from fhir.resources.medicationadministration import MedicationAdministration, MedicationAdministrationDosage
 from fhir.resources.codeableconcept import CodeableConcept
+from fhir.resources.annotation import Annotation
 from fhir.resources.timing import Timing, TimingRepeat
 from fhir.resources.range import Range
 from fhir.resources.quantity import Quantity
@@ -301,6 +302,7 @@ class FHIRTransformer(BaseModel):
         if organization_mapping['partOf'].value:
             program_identifier = self.populate_identifier(value=organization_mapping['partOf'].value)
             program_id = self.mint_id(identifier=program_identifier, resource_type='Organization')
+            # print(f"capturing part of {organization_mapping['partOf'].value}")
             _part_of = Reference(**{"reference": f"Organization/{program_id}"})
 
             program_organization = Organization(**{"id": program_id,
@@ -331,6 +333,7 @@ class FHIRTransformer(BaseModel):
         if "," in patient_mapping['identifier'].value:
             patient_identifier_values = patient_mapping['identifier'].value.split(',')
             patient_identifier_values = [x.strip() for x in patient_identifier_values]
+            patient_identifier_values.sort()
 
             members = []
             for group_member_identifier in patient_identifier_values:
@@ -343,7 +346,9 @@ class FHIRTransformer(BaseModel):
                 members.append(
                     GroupMember(**{'entity': Reference(**{"reference": f"Patient/{patient_group_member.id}"})}))
 
-            group_identifier = self.populate_identifier(value=patient_mapping['identifier'].value)
+            # order of comma seperated values may change the mint id
+            # sort the identifiers
+            group_identifier = self.populate_identifier(value=','.join(patient_identifier_values))
             group_id = self.mint_id(identifier=group_identifier, resource_type='Group')
             group = Group(**{'id': group_id, "identifier": [group_identifier], "membership": 'definitional',
                              'member': members, "type": "person"})
@@ -363,7 +368,7 @@ class FHIRTransformer(BaseModel):
         return patient
 
     def create_specimen(self, patient: Patient | None, generated_resources: list[Resource],
-                        group: Group | None) -> Specimen | None:
+                        group: Group | None, organization: Organization | None) -> Specimen | None:
         """Create a specimen."""
         if 'Specimen' not in self.resource_mapping:
             return None
@@ -392,7 +397,9 @@ class FHIRTransformer(BaseModel):
         specimen.id = self.mint_id(identifier=identifier, resource_type='Specimen')
 
         practitioner = next(iter([_ for _ in generated_resources if _.resource_type == 'Practitioner']), None)
-        organization = next(iter([_ for _ in generated_resources if _.resource_type == 'Organization']), None)
+
+        if not organization:
+            organization = next(iter([_ for _ in generated_resources if _.resource_type == 'Organization']), None)
 
         if practitioner:
             if not specimen.collection:
@@ -627,9 +634,7 @@ class FHIRTransformer(BaseModel):
                             "code": code})
 
     def create_medication(self, compound_name: Optional[str], treatment_type: Optional[str],
-                          _substance: Optional[Substance]) -> Medication:
-        code = None
-        med_identifier = None
+                          _substance: Optional[Substance], generated_resources: list[Resource]) -> Medication:
 
         if compound_name:
             if ":" in compound_name:
@@ -665,62 +670,184 @@ class FHIRTransformer(BaseModel):
                              "code": code,
                              "ingredient": ingredients})
 
-    def create_medication_administration(self, patient: Patient, generated_resources: list[Resource]) -> MedicationAdministration | None:
-        # if treatment type or drug name exists - make MedicationAdministration
-        # if treatment end index days exists, then status -> completed, else status is defined by user (matching fhir requirnments) or unknown
-        # if drug name is null, then Medication.code -> snomed_code: Unknown 261665006
-        # Medication.ingredient.item -> Substance.code -> SubstanceDefinition
-        # status, medication , subject are required by FHIR
+    def chembl2medication(self, generate_resources: list[Resource]):
+        # duplicate attempt to pull out query logic
+        medications = []
+
+        for field, field_info in self.model_fields.items():
+            if not field_info.json_schema_extra:
+                continue
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.medication" or \
+                    field_info.json_schema_extra['fhir_resource_type'] == "Medication.ingredient":
+                medication_name = getattr(self, field)
+                if medication_name:
+                    medications.append(medication_name)
+
+        chembl_information = self.fetch_chembl_data(medications, limit=1000)
+
+        if chembl_information:
+            drug_name = []
+            for row in chembl_information:
+                if 'COMPOUND_NAME' in row and row['COMPOUND_NAME'] is not None:
+                    drug_name.append(row['COMPOUND_NAME'])
+            study_drugs = list(set(drug_name))
+
+            for medication_name in study_drugs:
+                drug_chembl_data = []
+                for row in chembl_information:
+                    if ('COMPOUND_NAME' in row and row['COMPOUND_NAME']
+                            is not None and row['COMPOUND_NAME'] == medication_name):
+                        drug_chembl_data.append(row)
+
+                if drug_chembl_data:
+                    sdr = self.create_substance_definition_representations(drug_chembl_data)
+                    if sdr:
+                        sd = self.create_substance_definition(compound_name=medication_name, representations=sdr)
+                        if sd:
+                            generate_resources.append(sd)
+                            substance = self.create_substance(compound_name=medication_name, substance_definition=sd)
+                            if substance:
+                                generate_resources.append(substance)
+                                medication = self.create_medication(compound_name=medication_name, treatment_type=None,
+                                                                    _substance=substance,
+                                                                    generated_resources=generate_resources)
+                                if medication:
+                                    generate_resources.append(medication)
+
+            return generate_resources
+
+    def create_medication_administration(self, patient: Patient,
+                                         generated_resources: list[Resource]) -> list[Resource] | None:
+        """
+        creates MedicationAdministration
+            - if treatment type or drug name exists - make MedicationAdministration
+            - if treatment end index days exists, then status -> completed, else status is defined by user
+                (matching fhir requirnments) or unknown
+            - if drug name is null, then Medication.code -> snomed_code: Unknown 261665006
+            - Medication.ingredient.item -> Substance.code -> SubstanceDefinition
+            - status, medication, subject are required by FHIR
+        """
+        # TODO: this function runs 5s per record which can add up on 1000+ records will have to create all Medications prior to this call
 
         assert patient, f"Medication Administration requires the patient information"
 
         status = None
-        substance_definition = None
-        substance = None
         medication = None
-        medication_code = None
+        medication_name = None
         index_end = None
         index_start = None
-        reason = []
+        admin_reason = []
+        status_reason = []
+        status_reason_value = None
+        total_dose_quantity = None
+        dose_route_code = None
+        dose_rate_quantity = None
+        med_admin_dosage = None
+        substance = None
 
-        for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
-            # print("Field:", field)
-            # print("field_info: ", field_info.json_schema_extra)
+        note = []
+
+        # get all medications
+        _medications = []
+        if generated_resources:
+             for _ in generated_resources:
+                 if _.resource_type == "Medication":
+                     _medications.append(_)
+        if not _medications:
+            return None
+
+        for field, field_info in self.model_fields.items():
             if not field_info.json_schema_extra:
                 continue
 
-            # if not field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.medication" or not field_info.json_schema_extra['fhir_resource_type'] == "Medication.ingredient":
-            #     print(f"Patient: {patient.id} does not have FHIR mappings to define the medication that was administered.")
-            #     return
-
-            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.medication" or field_info.json_schema_extra['fhir_resource_type'] == "Medication.ingredient":
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.medication" or \
+                    field_info.json_schema_extra['fhir_resource_type'] == "Medication.ingredient":
                 medication_name = getattr(self, field)
-                substance = None
 
-                _l = self.fetch_chembl_data([medication_name], limit=10) # TODO: do this once on all - have the user pass list - separate from medadmin
-                if _l:
-                    sdr = self.create_substance_definition_representations(_l)
+                #if not medication_name:
+                    # print(field_info.json_schema_extra)
+                 #   continue
+
+                # for med in _medications:
+                #     if med.code.coding[0].code == medication_name:
+                #         medication = med
+
+                drug_chembl_data = self.fetch_chembl_data([medication_name], limit=50)
+
+                if drug_chembl_data:
+                    sdr = self.create_substance_definition_representations(drug_chembl_data)
                     if sdr:
                         sd = self.create_substance_definition(compound_name=medication_name, representations=sdr)
                         if sd:
+                            generated_resources.append(sd)
                             substance = self.create_substance(compound_name=medication_name, substance_definition=sd)
+                            if substance:
+                                generated_resources.append(substance)
 
-                medication = self.create_medication(compound_name=medication_name, treatment_type=None, _substance=substance)
+                # not all med have chembl information
+                medication = self.create_medication(compound_name=medication_name, treatment_type=None,
+                                                    _substance=substance,
+                                                    generated_resources=generated_resources)
                 if medication:
                     print(medication.json())
+                    generated_resources.append(medication)
 
             if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.reason.concept":
-                reason_value = getattr(self, field)
-                reason = [CodeableReference(
-                    **{"concept": CodeableConcept(**{"coding": [{"code": reason_value, "system": self._helper.system, "display": reason_value}]})})]
+                admin_reason_value = getattr(self, field)
+                if admin_reason_value:
+                    admin_reason = [CodeableReference(
+                        **{"concept": CodeableConcept(**{
+                            "coding": [{"code": admin_reason_value,
+                                        "system": self._helper.system,
+                                        "display": admin_reason_value}]})})]
 
-            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.high":
-                index_end = getattr(self, field)
-                # TODO: need a more general way to define the concept of (index) Days to Treatment End
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.statusReason":
+                status_reason_value = getattr(self, field)
+
+                if status_reason_value:
+                    status_reason = [CodeableConcept(**{"coding": [{
+                        "code": status_reason_value,
+                        "system": self._helper.system,
+                        "display": status_reason_value}]})]
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.dosage.dose":
+                total_dose = getattr(self, field)
+                if total_dose:
+                    total_dose_quantity = Quantity(**{"value": round(total_dose, 2)})
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.dosage.rateQuantity":
+                dose_rate = getattr(self, field)
+                if dose_rate:
+                    dose_rate_quantity = Quantity(**{"value": round(dose_rate, 2)})
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.dosage.route":
+                dose_route = getattr(self, field)
+                dose_route_code = CodeableConcept(**{
+                    "coding": [{"code": dose_route,
+                                "system": self._helper.system,
+                                "display": dose_route}]})
+
+            if total_dose_quantity:
+                med_admin_dosage = MedicationAdministrationDosage(**{"dose": total_dose_quantity,
+                                                                     "route": dose_route_code,
+                                                                     "rateQuantity": dose_rate_quantity})
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.note":
+                note_content = getattr(self, field)
+                if note_content:
+                    note.append(Annotation(**{"text": note_content}))
+
+            if field_info.json_schema_extra[
+                'fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.high":
+                index_end = getattr(self, field)  # TODO: do we need a more general way to define treatment was completed/stopped?
                 status = "completed"
             elif field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.status":
                 status_value = getattr(self, field)
-                if status_value in ['in-progress', 'not-done', 'on-hold', 'completed', 'entered-in-error', 'stopped', 'unknown']:
+                if status_reason_value:
+                    status = 'stopped'
+                elif status_value in ['in-progress', 'not-done', 'on-hold', 'completed', 'entered-in-error', 'stopped',
+                                      'unknown']:
                     status = status_value
                 else:
                     status = "unknown"
@@ -729,30 +856,67 @@ class FHIRTransformer(BaseModel):
                 'fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.low":
                 index_start = getattr(self, field)
 
-        timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(**{"low": Quantity(**{"value": 0}), "high": Quantity(**{"value": 1})})})})# place holder - required by FHIR
+        timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(**{"low": Quantity(**{"value": 0}),
+                                                                             "high": Quantity(**{
+                                                                                 "value": 1})})})})  # place holder - required by FHIR
         if index_start and index_end:
-            timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(**{"low": Quantity(**{"value": int(index_start)}), "high": Quantity(**{"value": int(index_end)})})})})
+            timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(
+                **{"low": Quantity(**{"value": int(index_start)}), "high": Quantity(**{"value": int(index_end)})})})})
 
-        medication_admin_identifier = Identifier(**{"system": self._helper.system, "use": "official",  "value": "-".join([patient.id, medication_name])})
-        medication_admin_id = self.mint_id(identifier=medication_admin_identifier, resource_type="MedicationAdministration")
+        # add in date notion to identifier
+        medication_admin_identifier = Identifier(
+            **{"system": self._helper.system, "use": "official", "value": "-".join([patient.id, medication_name])})
+        medication_admin_id = self.mint_id(identifier=medication_admin_identifier,
+                                           resource_type="MedicationAdministration")
 
         medication_code = CodeableConcept(**{"coding": [{"code": medication_name,
-                                                             "system": self._helper.system,
-                                                             "display": medication_name}]})
+                                                         "system": self._helper.system,
+                                                         "display": medication_name}]})
+
+        if not medication:
+            # information not in chembl
+            print(f"Medication {medication_name}, with object type {type(medication_name)} wasn't found in CHebml.")
+            print(f"adding Medication with research project's system definition")
+
+            med_identifier = Identifier(
+                **{"system": self._helper.system, "value": medication_name, "use": "official"})
+
+            med_id = self.mint_id(identifier=med_identifier, resource_type="Medication")
+
+            code = CodeableConcept(**{
+                "coding": [{"code": medication_name,
+                            "system": "/".join([self._helper.system, "medication"]),
+                            "display": medication_name}]})
+
+            medication = Medication(**{"id": med_id,
+                                       "identifier": [med_identifier],
+                                       "code": code})
 
         medication_codeable_reference = CodeableReference(**{"concept": medication_code, "reference": Reference(
             **{"reference": f"Medication/{medication.id}"})})
 
+        # ingredient.strengthQuantity.unit
+        # ingredient.strengthQuantity.value
+        # Identifier.secondary
+
         data = {"id": medication_admin_id,
                 "identifier": [medication_admin_identifier],
                 "status": status,
+                "statusReason": status_reason,
+                "reason": admin_reason,
                 "medication": medication_codeable_reference,
                 "subject": {
                     "reference": f"Patient/{patient.id}"
                 },
-                "occurenceTiming": timing}
+                "occurenceTiming": timing,
+                "dosage": med_admin_dosage,
+                "note": note}
 
-        return MedicationAdministration(**data)
+        med_admin = MedicationAdministration(**data)
+
+        if med_admin:
+            generated_resources.append(med_admin)
+        return generated_resources
 
     def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
         """Default transformation, call this method if you don't want to implement your own transform."""
@@ -774,7 +938,7 @@ class FHIRTransformer(BaseModel):
             research_subject = self.create_research_subject(patient, research_study)
             generated_resources.extend([patient, research_subject])
 
-        specimen = self.create_specimen(patient, generated_resources, group=None)
+        specimen = self.create_specimen(patient, generated_resources, group=None, organization=organization)
         if specimen:
             generated_resources.append(specimen)
 
@@ -786,6 +950,7 @@ class FHIRTransformer(BaseModel):
         if procedure:
             generated_resources.append(procedure)
 
+        # self.chembl2medication(generated_resources)
         self.create_medication_administration(patient, generated_resources)
 
         generated_observations = []
@@ -794,7 +959,6 @@ class FHIRTransformer(BaseModel):
             if observations:
                 generated_observations.extend(observations)
         generated_resources.extend(generated_observations)
-
 
         assert all([_ for _ in generated_resources]), "Should not have a None"
         return generated_resources
