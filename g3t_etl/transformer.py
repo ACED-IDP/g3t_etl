@@ -729,7 +729,6 @@ class FHIRTransformer(BaseModel):
             - status, medication, subject are required by FHIR
         """
         # TODO: this function runs 5s per record which can add up on 1000+ records will have to create all Medications prior to this call
-
         assert patient, f"Medication Administration requires the patient information"
 
         status = None
@@ -747,15 +746,6 @@ class FHIRTransformer(BaseModel):
         substance = None
 
         note = []
-
-        # get all medications
-        _medications = []
-        if generated_resources:
-             for _ in generated_resources:
-                 if _.resource_type == "Medication":
-                     _medications.append(_)
-        if not _medications:
-            return None
 
         for field, field_info in self.model_fields.items():
             if not field_info.json_schema_extra:
@@ -823,6 +813,8 @@ class FHIRTransformer(BaseModel):
 
             if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.dosage.route":
                 dose_route = getattr(self, field)
+                if not dose_route:
+                    dose_route = "Unknown"
                 dose_route_code = CodeableConcept(**{
                     "coding": [{"code": dose_route,
                                 "system": self._helper.system,
@@ -832,6 +824,7 @@ class FHIRTransformer(BaseModel):
                 med_admin_dosage = MedicationAdministrationDosage(**{"dose": total_dose_quantity,
                                                                      "route": dose_route_code,
                                                                      "rateQuantity": dose_rate_quantity})
+                print(f"MedicationAdministration dosage: {med_admin_dosage.json()}")
 
             if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.note":
                 note_content = getattr(self, field)
@@ -951,7 +944,15 @@ class FHIRTransformer(BaseModel):
             generated_resources.append(procedure)
 
         # self.chembl2medication(generated_resources)
-        self.create_medication_administration(patient, generated_resources)
+        has_medication_mapping = any(
+            "Medication" in field_info.json_schema_extra.get('fhir_resource_type', '') or
+            "MedicationAdministration.medication" in field_info.json_schema_extra.get('fhir_resource_type', '')
+            for field, field_info in self.model_fields.items()
+        )
+
+        if has_medication_mapping:
+            print("Creating MedicationAdministration----")
+            self.create_medication_administration(patient, generated_resources)
 
         generated_observations = []
         for _ in generated_resources:
