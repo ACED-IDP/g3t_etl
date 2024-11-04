@@ -744,6 +744,7 @@ class FHIRTransformer(BaseModel):
         dose_rate_quantity = None
         med_admin_dosage = None
         substance = None
+        secondary_identifier = None
 
         note = []
 
@@ -831,6 +832,13 @@ class FHIRTransformer(BaseModel):
                 if note_content:
                     note.append(Annotation(**{"text": note_content}))
 
+            # TODO: move this out - STUDY SPECIFIC
+            if field_info.json_schema_extra['fhir_resource_type'] == "Identifier.secondary":
+                ident_value = getattr(self, field)
+                if ident_value:
+                    secondary_identifier = Identifier(**{"system": "/".join([self._helper.system, "regimen"]), "use": "secondary", "value": ident_value})
+                    print(f"IDENTIFIER REGIM: {ident_value}, {secondary_identifier}")
+
             if field_info.json_schema_extra[
                 'fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.high":
                 index_end = getattr(self, field)  # TODO: do we need a more general way to define treatment was completed/stopped?
@@ -856,6 +864,7 @@ class FHIRTransformer(BaseModel):
             timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(
                 **{"low": Quantity(**{"value": int(index_start)}), "high": Quantity(**{"value": int(index_end)})})})})
 
+
         # add in date notion to identifier
         medication_admin_identifier = Identifier(
             **{"system": self._helper.system, "use": "official", "value": "-".join([patient.id, medication_name])})
@@ -868,8 +877,8 @@ class FHIRTransformer(BaseModel):
 
         if not medication:
             # information not in chembl
-            print(f"Medication {medication_name}, with object type {type(medication_name)} wasn't found in CHebml.")
-            print(f"adding Medication with research project's system definition")
+            # print(f"Medication {medication_name}, with object type {type(medication_name)} wasn't found in CHebml.")
+            # print(f"adding Medication with research project's system definition")
 
             med_identifier = Identifier(
                 **{"system": self._helper.system, "value": medication_name, "use": "official"})
@@ -891,9 +900,21 @@ class FHIRTransformer(BaseModel):
         # ingredient.strengthQuantity.unit
         # ingredient.strengthQuantity.value
         # Identifier.secondary
+        _identifiers = []
+        if secondary_identifier:
+            _identifiers.append(secondary_identifier)
+        if medication_admin_identifier:
+            _identifiers.append(medication_admin_identifier)
+
+        # TODO: move this out - STUDY SPECIFIC
+        if index_start:
+            time_identifier = Identifier(
+                **{"system": "/".join([self._helper.system, "index_date_start_days"]), "use": "secondary", "value": index_start})
+            if time_identifier:
+                _identifiers.append(time_identifier)
 
         data = {"id": medication_admin_id,
-                "identifier": [medication_admin_identifier],
+                "identifier": _identifiers,
                 "status": status,
                 "statusReason": status_reason,
                 "reason": admin_reason,
@@ -909,6 +930,7 @@ class FHIRTransformer(BaseModel):
 
         if med_admin:
             generated_resources.append(med_admin)
+            print(med_admin.json(), "\n")
         return generated_resources
 
     def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
