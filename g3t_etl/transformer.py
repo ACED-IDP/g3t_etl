@@ -756,14 +756,6 @@ class FHIRTransformer(BaseModel):
                     field_info.json_schema_extra['fhir_resource_type'] == "Medication.ingredient":
                 medication_name = getattr(self, field)
 
-                #if not medication_name:
-                    # print(field_info.json_schema_extra)
-                 #   continue
-
-                # for med in _medications:
-                #     if med.code.coding[0].code == medication_name:
-                #         medication = med
-
                 drug_chembl_data = self.fetch_chembl_data([medication_name], limit=50)
 
                 if drug_chembl_data:
@@ -781,7 +773,6 @@ class FHIRTransformer(BaseModel):
                                                     _substance=substance,
                                                     generated_resources=generated_resources)
                 if medication:
-                    print(medication.json())
                     generated_resources.append(medication)
 
             if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.reason.concept":
@@ -825,7 +816,7 @@ class FHIRTransformer(BaseModel):
                 med_admin_dosage = MedicationAdministrationDosage(**{"dose": total_dose_quantity,
                                                                      "route": dose_route_code,
                                                                      "rateQuantity": dose_rate_quantity})
-                print(f"MedicationAdministration dosage: {med_admin_dosage.json()}")
+                # print(f"MedicationAdministration dosage: {med_admin_dosage.json()}")
 
             if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.note":
                 note_content = getattr(self, field)
@@ -877,9 +868,6 @@ class FHIRTransformer(BaseModel):
 
         if not medication:
             # information not in chembl
-            # print(f"Medication {medication_name}, with object type {type(medication_name)} wasn't found in CHebml.")
-            # print(f"adding Medication with research project's system definition")
-
             med_identifier = Identifier(
                 **{"system": self._helper.system, "value": medication_name, "use": "official"})
 
@@ -930,7 +918,7 @@ class FHIRTransformer(BaseModel):
 
         if med_admin:
             generated_resources.append(med_admin)
-            print(med_admin.json(), "\n")
+            # print(med_admin.json(), "\n")
         return generated_resources
 
     def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
