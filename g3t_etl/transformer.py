@@ -396,10 +396,10 @@ class FHIRTransformer(BaseModel):
         specimen.identifier = specimen_identifier
         specimen.id = self.mint_id(identifier=identifier, resource_type='Specimen')
 
-        practitioner = next(iter([_ for _ in generated_resources if _.resource_type == 'Practitioner']), None)
+        practitioner = next(iter([_ for _ in generated_resources if _.get_resource_type() == 'Practitioner']), None)
 
         if not organization:
-            organization = next(iter([_ for _ in generated_resources if _.resource_type == 'Organization']), None)
+            organization = next(iter([_ for _ in generated_resources if _.get_resource_type() == 'Organization']), None)
 
         if practitioner:
             if not specimen.collection:
@@ -1001,7 +1001,7 @@ class FHIRTransformer(BaseModel):
                         'observation_subject']:
                         focus_resource_type = field_info.json_schema_extra['observation_subject']
                 else:
-                    focus_resource_type = focus.resource_type
+                    focus_resource_type = focus.get_resource_type()
                 if focus_resource_type == None and isinstance(focus, list):
                     for focus_item in focus:
                         resource_type.append(focus_item.get_resource_type())
