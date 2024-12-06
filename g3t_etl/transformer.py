@@ -996,7 +996,7 @@ class FHIRTransformer(BaseModel):
                 if isinstance(focus, list):
                     resource_type = []
                     for focus_item in focus:
-                        resource_type.append(focus_item.resource_type)
+                        resource_type.append(focus_item.get_resource_type())
                     if len(list(set(resource_type))) == 1 and resource_type[0] == field_info.json_schema_extra[
                         'observation_subject']:
                         focus_resource_type = field_info.json_schema_extra['observation_subject']
@@ -1004,7 +1004,7 @@ class FHIRTransformer(BaseModel):
                     focus_resource_type = focus.resource_type
                 if focus_resource_type == None and isinstance(focus, list):
                     for focus_item in focus:
-                        resource_type.append(focus_item.resource_type)
+                        resource_type.append(focus_item.get_resource_type())
                     if len(list(set(resource_type))) == 1:
                         focus_resource_type = resource_type[0]
                     elif focus:
@@ -1054,15 +1054,21 @@ class FHIRTransformer(BaseModel):
             elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
                 component.valueQuantity = self.to_quantity(field=component_field, field_info=component_field_info,
                                                            value=component_value)
-            else:
-                component.valueString = getattr(self, component_field)
+            elif 'bool' in field_type:
+                component_value = getattr(self, component_field)
+                if isinstance(component_value, bool):
+                    component.valueBoolean = component_value
+
+            elif component_value and isinstance(getattr(self, component_field), str):
+                component_value = getattr(self, component_field)
+                component.valueString = str(component_value)
 
             if component:
                 components.append(component)
                 if isinstance(focus, list):
                     observation_focus = [self.to_reference(_f) for _f in focus]
                 else:
-                    if component_field_info.json_schema_extra['observation_subject'] == focus.resource_type:
+                    if component_field_info.json_schema_extra['observation_subject'] == focus.get_resource_type():
                         observation_focus = [
                             self.to_reference(focus)]  # should be the same focus reference for the component use-case
         if isinstance(focus, list):
@@ -1257,7 +1263,7 @@ class FHIRTransformer(BaseModel):
 
     def to_reference(self, resource: Resource) -> Reference:
         """Create a reference from a resource of the form RESOURCE/id."""
-        return Reference(reference=f"{resource.resource_type}/{resource.id}")
+        return Reference(reference=f"{resource.get_resource_type()}/{resource.id}")
 
     def to_codeable_reference(self, *args: Any, **kwargs: Any) -> CodeableReference:
         """Create a reference from a resource of the form RESOURCE/id."""

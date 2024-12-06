@@ -69,7 +69,9 @@ def transform_csv(input_path: pathlib.Path,
         transformer = transformer_class(helper=DEFAULT_HELPER, template_helper=template_helper)
         research_study = transformer.create_research_study()
         already_seen.add(research_study.id)
-        get_emitter(emitters, research_study.resource_type, str(output_path), verbose=False).write(research_study.json() + "\n")
+        # get_emitter(emitters, research_study.resource_type, str(output_path), verbose=False).write(research_study.json() + "\n")
+        get_emitter(emitters, research_study.get_resource_type(), str(output_path), verbose=False).write(
+            research_study.json() + "\n")
         emitted_count += 1
 
     except ValidationError as e:
@@ -101,7 +103,7 @@ def transform_csv(input_path: pathlib.Path,
                 if resource.id in already_seen:
                     continue
                 already_seen.add(resource.id)
-                get_emitter(emitters, resource.resource_type, str(output_path), verbose=False).write(resource.json() + "\n")
+                get_emitter(emitters, resource.get_resource_type(), str(output_path), verbose=False).write(resource.json() + "\n")
                 emitted_count += 1
         except ValidationError as e:
             transformer_errors.append(e)
