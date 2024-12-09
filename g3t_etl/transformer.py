@@ -974,7 +974,7 @@ class FHIRTransformer(BaseModel):
         assert all([_ for _ in generated_resources]), "Should not have a None"
         return generated_resources
 
-    def create_observations(self, subject, focus) -> list[Observation]:
+    def create_observations(self, subject, focus, jinja_observation_code=None) -> list[Observation]:
         """Create observations."""
         observations = []
 
@@ -1078,9 +1078,6 @@ class FHIRTransformer(BaseModel):
 
         if components and observation_focus:
             code = None
-            identifier = self.observation_identifier(field=None, focus=focus, subject=subject)
-            assert identifier, f"Can't proceed, Observation with focus: {focus} is missing Identifier."
-            id_ = self.mint_id(identifier=identifier, resource_type='Observation')
             observation_dict = self.render_template(f"Observation.yaml.jinja")
 
             if 'code' in observation_dict and not observation_code:
@@ -1105,10 +1102,19 @@ class FHIRTransformer(BaseModel):
                 code=code
             )
 
+            if jinja_observation_code:
+                field_code = jinja_observation_code
+            else:
+                field_code = code
+            identifier = self.observation_identifier(field=field_code, focus=focus, subject=subject)
+            assert identifier, f"Can't proceed, Observation with focus: {focus} is missing Identifier."
+            id_ = self.mint_id(identifier=identifier, resource_type='Observation')
+
             observation.id = id_
             observation.identifier = [identifier]
             observation.subject = self.to_reference(subject)
             observation.focus = observation_focus
+
             observation.component = components
 
             observations.append(observation)
@@ -1233,7 +1239,7 @@ class FHIRTransformer(BaseModel):
             identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
         else:
             # component dependent
-            identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}")
+            identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
         return identifier
 
     def to_quantity(self, field_info: FieldInfo, field=None, value=None) -> dict:
