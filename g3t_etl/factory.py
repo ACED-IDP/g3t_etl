@@ -1,4 +1,5 @@
 """Factory for creating a transformer."""
+import os
 import pathlib
 from typing import Callable
 
@@ -103,7 +104,20 @@ def transform_csv(input_path: pathlib.Path,
                 if resource.id in already_seen:
                     continue
                 already_seen.add(resource.id)
-                get_emitter(emitters, resource.get_resource_type(), str(output_path), verbose=False).write(resource.json() + "\n")
+                resource_type = resource.get_resource_type()
+                if resource_type == "Observation": # if Observation - always append to the ndjson file
+                    output_file = os.path.join(output_path, "Observation.ndjson")
+                    if os.path.exists(output_file): # possibly don't need this check
+                        # print(f"{output_file} exists. Appending new data to Observation.ndjson.")
+                        get_emitter(emitters, resource_type, str(output_path), verbose=False, file_mode="a").write(
+                            resource.json() + "\n")
+                    else:
+                        # print(f"{output_file} does not exist. Creating a new Observation.ndjson file.")
+                        get_emitter(emitters, resource_type, str(output_path), verbose=False, file_mode="w").write(
+                            resource.json() + "\n")
+                else:
+                    get_emitter(emitters, resource_type, str(output_path), verbose=False).write(resource.json() + "\n")
+
                 emitted_count += 1
         except ValidationError as e:
             transformer_errors.append(e)
