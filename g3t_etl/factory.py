@@ -5,7 +5,13 @@ from typing import Callable
 
 import numpy as np
 import pandas
+import orjson
+import json
+import importlib
 from pydantic import BaseModel, ConfigDict, ValidationError
+
+import decimal
+from fhir.resources.fhirresourcemodel import FHIRAbstractModel
 
 from g3t_etl import get_emitter, print_transformation_error, print_validation_error, close_emitters, Transformer
 from g3t_etl.transformer import DEFAULT_HELPER, TemplateHelper
@@ -40,6 +46,75 @@ class TransformationResults(BaseModel):
     transformer_errors: list[ValidationError]
 
 
+def remove_empty_dicts(data):
+    """
+    Recursively remove empty dictionaries and lists from nested data structures.
+    """
+    if isinstance(data, dict):
+        new_data = {}
+        for k, v in data.items():
+            if isinstance(v, (dict, list)):
+                cleaned = remove_empty_dicts(v)
+                # keep non-empty structures or zero
+                if cleaned or cleaned == 0:
+                    new_data[k] = cleaned
+            # keep values that are not empty or zero
+            elif v or v == 0:
+                new_data[k] = v
+        return new_data
+
+    elif isinstance(data, list):
+        cleaned_list = [remove_empty_dicts(item) for item in data]
+        cleaned_list = [item for item in cleaned_list if item or item == 0]  # remove empty items
+        return cleaned_list if cleaned_list else None  # return none if list is empty
+
+    else:
+        return data
+
+
+def convert_decimal_to_float(data):
+    """Convert pydantic Decimal to float"""
+    if isinstance(data, dict):
+        return {k: convert_decimal_to_float(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [convert_decimal_to_float(item) for item in data]
+    elif isinstance(data, decimal.Decimal):
+        return float(data)
+    else:
+        return data
+
+
+def convert_value_quantity_to_float(data):
+    """
+    Recursively converts all 'valueQuantity' -> 'value' fields in a nested dictionary or list
+    from strings to floats.
+    """
+    if isinstance(data, list):
+        return [convert_value_quantity_to_float(item) for item in data]
+    elif isinstance(data, dict):
+        for key, value in data.items():
+            if key == 'valueQuantity' and isinstance(value, dict) and 'value' in value:
+                if isinstance(value['value'], str):
+                    # and value['value'].replace('.', '', 1).isdigit():
+                    value['value'] = float(value['value'])
+            else:
+                data[key] = convert_value_quantity_to_float(value)
+    return data
+
+
+def validate_fhir_resource_from_type(resource_type: str, resource_data: dict) -> FHIRAbstractModel:
+    """
+    Generalized function to validate any FHIR resource type using its name.
+    """
+    try:
+        resource_module = importlib.import_module(f"fhir.resources.{resource_type.lower()}")
+        resource_class = getattr(resource_module, resource_type)
+        return resource_class.model_validate(resource_data)
+
+    except (ImportError, AttributeError) as e:
+        raise ValueError(f"Invalid resource type: {resource_type}. Error: {str(e)}")
+
+
 def transform_csv(input_path: pathlib.Path,
                   output_path: pathlib.Path,
                   already_seen: set = None,
@@ -72,7 +147,7 @@ def transform_csv(input_path: pathlib.Path,
         already_seen.add(research_study.id)
         # get_emitter(emitters, research_study.resource_type, str(output_path), verbose=False).write(research_study.json() + "\n")
         get_emitter(emitters, research_study.get_resource_type(), str(output_path), verbose=False).write(
-            research_study.json() + "\n")
+            research_study.model_dump_json() + "\n")
         emitted_count += 1
 
     except ValidationError as e:
@@ -105,18 +180,31 @@ def transform_csv(input_path: pathlib.Path,
                     continue
                 already_seen.add(resource.id)
                 resource_type = resource.get_resource_type()
+
+                raw_resource_json = resource.model_dump_json()
+                cleaned_resource_dict = remove_empty_dicts(orjson.loads(raw_resource_json))
+
+                try:
+                    validated_resource = validate_fhir_resource_from_type(resource_type, cleaned_resource_dict).model_dump_json()
+                except ValueError as e:
+                    print(f"Validation failed for {resource_type}: {e}")
+                    continue
+
+                # handle pydantic Decimal cases
+                validated_resource = convert_decimal_to_float(orjson.loads(validated_resource))
+                validated_resource = convert_value_quantity_to_float(validated_resource)
+                validated_resource = orjson.dumps(validated_resource).decode("utf-8")
+
                 if resource_type == "Observation": # if Observation - always append to the ndjson file
                     output_file = os.path.join(output_path, "Observation.ndjson")
                     if os.path.exists(output_file): # possibly don't need this check
-                        # print(f"{output_file} exists. Appending new data to Observation.ndjson.")
                         get_emitter(emitters, resource_type, str(output_path), verbose=False, file_mode="a").write(
-                            resource.json() + "\n")
+                            validated_resource + "\n")
                     else:
-                        # print(f"{output_file} does not exist. Creating a new Observation.ndjson file.")
                         get_emitter(emitters, resource_type, str(output_path), verbose=False, file_mode="w").write(
-                            resource.json() + "\n")
+                            validated_resource + "\n")
                 else:
-                    get_emitter(emitters, resource_type, str(output_path), verbose=False).write(resource.json() + "\n")
+                    get_emitter(emitters, resource_type, str(output_path), verbose=False).write(validated_resource + "\n")
 
                 emitted_count += 1
         except ValidationError as e:
