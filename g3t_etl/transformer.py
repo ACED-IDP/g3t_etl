@@ -402,13 +402,17 @@ class FHIRTransformer(BaseModel):
             organization = next(iter([_ for _ in generated_resources if _.get_resource_type() == 'Organization']), None)
 
         if practitioner:
-            if not specimen.collection:
-                specimen.collection = SpecimenCollection()
-            specimen.collection.collector = self.to_reference(practitioner)
+            practitioner_reference = self.to_reference(practitioner)
+            if practitioner_reference.reference:
+                if not specimen.collection:
+                    specimen.collection = SpecimenCollection()
+                specimen.collection.collector = practitioner_reference
         elif organization:
-            if not specimen.collection:
-                specimen.collection = SpecimenCollection()
-            specimen.collection.collector = self.to_reference(organization)
+            organization_reference = self.to_reference(organization)
+            if organization_reference.reference:
+                if not specimen.collection:
+                    specimen.collection = SpecimenCollection()
+                specimen.collection.collector = organization_reference
 
         for field, info in specimen_mapping.items():
             if field == 'identifier':
