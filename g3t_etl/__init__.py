@@ -17,6 +17,7 @@ from gen3_tracker.common import read_ndjson_file
 from nested_lookup import nested_lookup
 from pydantic import BaseModel, computed_field, ConfigDict, ValidationError, field_validator
 from pydantic_core import InitErrorDetails
+from g3t_etl.patcher import apply_patches
 logger = logging.getLogger(__name__)
 
 IDENTIFIER_USE = 'official'
@@ -252,3 +253,6 @@ def run_command(cmd: str | list[str]) -> (int, str, str):
     stdout, stderr = process.communicate()
 
     return process.returncode, stdout.decode(), stderr.decode()
+
+
+apply_patches()
