@@ -102,6 +102,26 @@ def convert_value_quantity_to_float(data):
     return data
 
 
+def convert_value_to_float(data):
+    """
+    Recursively converts all general 'entity' -> 'value' fields in a nested dictionary or list
+    from strings to float or int.
+    """
+    if isinstance(data, list):
+        return [convert_value_to_float(item) for item in data]
+    elif isinstance(data, dict):
+        for key, value in data.items():
+            if isinstance(value, dict) and 'value' in value:
+                if isinstance(value['value'], str):
+                    if value['value'].replace('.', '').replace('-', '', 1).isdigit() and "." in value['value']:
+                        value['value'] = float(value['value'])
+                    elif value['value'].replace('.', '').replace('-', '', 1).isdigit() and "." not in value['value']:
+                        value['value'] = int(value['value'])
+            else:
+                data[key] = convert_value_to_float(value)
+    return data
+
+
 def validate_fhir_resource_from_type(resource_type: str, resource_data: dict) -> FHIRAbstractModel:
     """
     Generalized function to validate any FHIR resource type using its name.
@@ -192,7 +212,7 @@ def transform_csv(input_path: pathlib.Path,
 
                 # handle pydantic Decimal cases
                 validated_resource = convert_decimal_to_float(orjson.loads(validated_resource))
-                validated_resource = convert_value_quantity_to_float(validated_resource)
+                validated_resource = convert_value_to_float(validated_resource)
                 validated_resource = orjson.dumps(validated_resource).decode("utf-8")
 
                 if resource_type == "Observation": # if Observation - always append to the ndjson file
