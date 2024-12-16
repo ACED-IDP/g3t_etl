@@ -827,13 +827,6 @@ class FHIRTransformer(BaseModel):
                 if note_content:
                     note.append(Annotation(**{"text": note_content}))
 
-            # TODO: move this out - STUDY SPECIFIC
-            if field_info.json_schema_extra['fhir_resource_type'] == "Identifier.secondary":
-                ident_value = getattr(self, field)
-                if ident_value:
-                    secondary_identifier = Identifier(**{"system": "/".join([self._helper.system, "regimen"]), "use": "secondary", "value": ident_value})
-                    print(f"IDENTIFIER REGIM: {ident_value}, {secondary_identifier}")
-
             if field_info.json_schema_extra[
                 'fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.high":
                 index_end = getattr(self, field)  # TODO: do we need a more general way to define treatment was completed/stopped?
@@ -891,19 +884,12 @@ class FHIRTransformer(BaseModel):
 
         # ingredient.strengthQuantity.unit
         # ingredient.strengthQuantity.value
-        # Identifier.secondary
-        _identifiers = []
-        if secondary_identifier:
-            _identifiers.append(secondary_identifier)
-        if medication_admin_identifier:
-            _identifiers.append(medication_admin_identifier)
 
-        # TODO: move this out - STUDY SPECIFIC
-        if index_start:
-            time_identifier = Identifier(
-                **{"system": "/".join([self._helper.system, "index_date_start_days"]), "use": "secondary", "value": index_start})
-            if time_identifier:
-                _identifiers.append(time_identifier)
+        _identifiers = []
+        if self.medication_administration_identifier:
+            _identifiers = self.medication_administration_identifier
+        elif medication_admin_identifier:
+            _identifiers.append(medication_admin_identifier)
 
         data = {"id": medication_admin_id,
                 "identifier": _identifiers,
