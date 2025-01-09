@@ -24,6 +24,7 @@ from fhir.resources.observation import Observation, ObservationComponent
 from fhir.resources.patient import Patient
 from fhir.resources.group import Group, GroupMember
 from fhir.resources.practitioner import Practitioner
+from fhir.resources.humanname import HumanName
 from fhir.resources.organization import Organization
 from fhir.resources.procedure import Procedure
 from fhir.resources.reference import Reference
@@ -269,18 +270,47 @@ class FHIRTransformer(BaseModel):
 
         practioner_mapping = self.resource_mapping['Practitioner']
         assert 'identifier' in practioner_mapping, f"Practitioner must have an identifier {self}"
-        identifier = self.populate_identifier(value=practioner_mapping['identifier'].value)
-        practitioner = self.template_practitioner()
-        practitioner.id = self.mint_id(identifier=identifier, resource_type='Practitioner')
-        practitioner.identifier = [identifier]
+        if practioner_mapping['identifier'].value:
+            if not isinstance(practioner_mapping['identifier'].value, Identifier):
+                identifier = self.populate_identifier(value=str(practioner_mapping['identifier'].value))
+            else:
+                identifier = practioner_mapping['identifier'].value
+            practitioner = self.template_practitioner()
+            practitioner.id = self.mint_id(identifier=identifier, resource_type='Practitioner')
+            practitioner.identifier = [identifier]
+            practitioner.name = [HumanName(**{"text": str(identifier.value)})]
 
-        for field, info in practioner_mapping.items():
-            if field == 'identifier':
-                # already processed this
-                continue
-            setattr(practitioner, field, info['value'])
+            organization_ = self.resource_mapping['Organization']
+            has_project = False
+            if organization_ and 'identifier' in organization_.keys() and hasattr(organization_['identifier'],
+                                                                                  'value') and organization_[
+                'identifier'].value:
+                org_identifier = self.populate_identifier(value=organization_['identifier'].value.value)
+                organization_id = self.mint_id(identifier=org_identifier, resource_type='Organization')
+                if organization_id:
+                    practitioner.qualification = [{"issuer": {"reference": f"Organization/{organization_id}"},
+                                                   "code": CodeableConcept(**{"coding": [{"code": "PHD",
+                                                                                          "system": "http://terminology.hl7.org/CodeSystem/v2-0360",
+                                                                                          "display": "Doctor of Philosophy"}]})}]
+                    has_project = True
+            if not has_project and 'partOf' in organization_.keys() and hasattr(organization_['partOf'],'value') and organization_['partOf'].value:
+                org_identifier = self.populate_identifier(value=organization_['partOf'].value)
+                organization_id = self.mint_id(identifier=org_identifier, resource_type='Organization')
+                if organization_id:
+                    practitioner.qualification = [{"issuer": {"reference": f"Organization/{organization_id}"},
+                                                   "code": CodeableConcept(**{"coding": [{"code": "PHD",
+                                                                                          "system": "http://terminology.hl7.org/CodeSystem/v2-0360",
+                                                                                          "display": "Doctor of Philosophy"}]})}]
 
-        return practitioner
+            for field, info in practioner_mapping.items():
+                if field == 'identifier':
+                    # already processed this
+                    continue
+                setattr(practitioner, field, info['value'])
+
+            return practitioner
+        else:
+            return None
 
     def create_organization(self, generated_resources: list[Resource]) -> Organization | None:
         """Create a FHIR organization."""
@@ -407,12 +437,12 @@ class FHIRTransformer(BaseModel):
                 if not specimen.collection:
                     specimen.collection = SpecimenCollection()
                 specimen.collection.collector = practitioner_reference
-        elif organization:
-            organization_reference = self.to_reference(organization)
-            if organization_reference.reference:
-                if not specimen.collection:
-                    specimen.collection = SpecimenCollection()
-                specimen.collection.collector = organization_reference
+        # elif organization:
+        #     organization_reference = self.to_reference(organization)
+        #     if organization_reference.reference:
+        #         if not specimen.collection:
+        #             specimen.collection = SpecimenCollection()
+        #         specimen.collection.collector = organization_reference
 
         for field, info in specimen_mapping.items():
             if field == 'identifier':
@@ -543,8 +573,10 @@ class FHIRTransformer(BaseModel):
     def fetch_chembl_data(compounds: list, limit: int) -> list:
         def get_chembl_compound_info(db_file_path: str, drug_names: list, _limit=limit) -> list:
             """Query Chembl COMPOUND_RECORDS by COMPOUND_NAME for FHIR Substance"""
+            assert drug_names, "The drug_names list is empty. Please provide at least one drug name."
+
             if len(drug_names) == 1:
-                _drug_names = tuple([x.upper() for x in [drug_names[0], drug_names[0]]])
+                _drug_names = f"('{drug_names[0].upper()}')"
             else:
                 _drug_names = tuple([x.upper() for x in drug_names])
 
@@ -829,7 +861,8 @@ class FHIRTransformer(BaseModel):
 
             if field_info.json_schema_extra[
                 'fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.high":
-                index_end = getattr(self, field)  # TODO: do we need a more general way to define treatment was completed/stopped?
+                index_end = getattr(self,
+                                    field)  # TODO: do we need a more general way to define treatment was completed/stopped?
                 status = "completed"
             elif field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.status":
                 status_value = getattr(self, field)
@@ -851,7 +884,6 @@ class FHIRTransformer(BaseModel):
         if index_start and index_end:
             timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(
                 **{"low": Quantity(**{"value": int(index_start)}), "high": Quantity(**{"value": int(index_end)})})})})
-
 
         # add in date notion to identifier
         medication_admin_identifier = Identifier(
