@@ -1257,11 +1257,21 @@ class FHIRTransformer(BaseModel):
             focus_identifier = "-".join(focus_identifiers)
         else:
             focus_identifier = self._helper.get_official_identifier(focus).value
+
         if field:
-            identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
+            # print("in if", type(field), field)
+            if isinstance(field, dict):
+                if 'coding' in field.keys():
+                    field_code = field["coding"][0]['code']
+                    identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field_code}")
+                else:
+                    identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
+            else:
+                identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
         else:
             # component dependent
             identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
+
         return identifier
 
     def to_quantity(self, field_info: FieldInfo, field=None, value=None) -> dict:
