@@ -44,6 +44,8 @@ def _map_type(dtype: str) -> str:
         return 'number'
     if 'datetime' in dtype:
         return 'string'
+    if 'string' in dtype: # not sure why I needed to add this
+        return 'string'
 
     assert dtype in ['string', 'number', 'object', 'array', 'boolean', 'null'], f"unknown dtype {dtype}"
 

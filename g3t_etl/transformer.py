@@ -2,13 +2,16 @@
 import inspect
 import logging
 import os
+import orjson
 import pathlib
 import shutil
 import sys
+import sqlite3
+import pandas as pd
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from datetime import datetime
-from typing import Any, Callable, ClassVar, NamedTuple
+from typing import Any, Callable, ClassVar, NamedTuple, Optional
 
 import click
 import inflection
@@ -19,13 +22,27 @@ from fhir.resources.fhirtypes import CodeableConceptType
 from fhir.resources.identifier import Identifier
 from fhir.resources.observation import Observation, ObservationComponent
 from fhir.resources.patient import Patient
+from fhir.resources.group import Group, GroupMember
 from fhir.resources.practitioner import Practitioner
+from fhir.resources.humanname import HumanName
+from fhir.resources.organization import Organization
 from fhir.resources.procedure import Procedure
 from fhir.resources.reference import Reference
 from fhir.resources.researchstudy import ResearchStudy
 from fhir.resources.researchsubject import ResearchSubject
 from fhir.resources.resource import Resource
 from fhir.resources.specimen import Specimen, SpecimenCollection
+from fhir.resources.substance import Substance
+from fhir.resources.substancedefinition import SubstanceDefinition, SubstanceDefinitionStructure, \
+    SubstanceDefinitionStructureRepresentation, SubstanceDefinitionName
+from fhir.resources.medication import Medication, MedicationIngredient
+from fhir.resources.medicationadministration import MedicationAdministration, MedicationAdministrationDosage
+from fhir.resources.codeableconcept import CodeableConcept
+from fhir.resources.annotation import Annotation
+from fhir.resources.timing import Timing, TimingRepeat
+from fhir.resources.range import Range
+from fhir.resources.quantity import Quantity
+from fhir.resources import get_fhir_model_class
 from jinja2 import Environment, FileSystemLoader, select_autoescape, PackageLoader
 from pydantic import ConfigDict
 from pydantic.fields import FieldInfo
@@ -34,13 +51,16 @@ from pydantic import BaseModel
 from g3t_etl import TransformerHelper, Transformer
 
 logger = logging.getLogger(__name__)
+CHEMBL_DB_PATH = "/Users/sanati/KCRB/g3t_etl/resources/chembl/chembl_34.db"
 
 
 class TemplateHelper:
     """Helper class for templates. Loads default templates and jinja environment."""
+
     def __init__(self, template_dir: pathlib.Path):
         self.template_dir: pathlib.Path = template_dir
-        self.jinja_env: Environment = Environment(loader=FileSystemLoader(self.template_dir), autoescape=select_autoescape())
+        self.jinja_env: Environment = Environment(loader=FileSystemLoader(self.template_dir),
+                                                  autoescape=select_autoescape())
         logger.info(f"Loaded {len(self.jinja_env.list_templates())} templates from {self.template_dir}")
 
     def render_template(self, template_name: str, transformer: 'FHIRTransformer') -> dict:
@@ -62,17 +82,15 @@ if pathlib.Path('.g3t/config.yaml').exists():
         _project_id = config['gen3']['project_id']
 else:
     if 'G3T_PROJECT_ID' not in os.environ:
-        logger.warning(f"No .g3t/config.yaml found. See `g3t init` or `g3t clone`.  Proceeding with project_id {_project_id}.")
+        logger.warning(
+            f"No .g3t/config.yaml found. See `g3t init` or `g3t clone`.  Proceeding with project_id {_project_id}.")
     else:
         _project_id = os.environ['G3T_PROJECT_ID']
 
 DEFAULT_HELPER = TransformerHelper(project_id=_project_id)
 
-
 transformers: list[Callable[..., Transformer]] = []
 default_dictionary_path: None
-
-
 
 
 def default_transformer():
@@ -178,12 +196,17 @@ class FHIRTransformer(BaseModel):
                     self._observation_mapping.append(
                         FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
                 else:
-                    self._resource_mapping[resource_type][_] = FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)})
+                    self._resource_mapping[resource_type][_] = FieldMappingInstance(
+                        **{'field_info': v, 'field': k, 'value': getattr(self, k)})
             elif resource_type == 'Observation':
-                self._observation_mapping.append(FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
+                self._observation_mapping.append(
+                    FieldMappingInstance(**{'field_info': v, 'field': k, 'value': getattr(self, k)}))
             else:
                 assert False, f"unknown mapping {(k, v)}"
         # print(f"FHIRTransformer init id: {id(self)}",  f"_helper:{self._helper}", f"_template_helper: {self._template_helper}")
+        self.SYSTEM_SNOME = 'http://snomed.info/sct'
+        self.SYSTEM_LOINC = 'http://loinc.org'
+        self.SYSTEM_chEMBL = 'https://www.ebi.ac.uk/chembl'
 
     def render_template(self, template_name: str) -> dict:
         """Render a template, populated with transformer's values."""
@@ -247,26 +270,120 @@ class FHIRTransformer(BaseModel):
 
         practioner_mapping = self.resource_mapping['Practitioner']
         assert 'identifier' in practioner_mapping, f"Practitioner must have an identifier {self}"
-        identifier = self.populate_identifier(value=practioner_mapping['identifier'].value)
-        practitioner = self.template_practitioner()
-        practitioner.id = self.mint_id(identifier=identifier, resource_type='Practitioner')
-        practitioner.identifier = [identifier]
+        if practioner_mapping['identifier'].value:
+            if not isinstance(practioner_mapping['identifier'].value, Identifier):
+                identifier = self.populate_identifier(value=str(practioner_mapping['identifier'].value))
+            else:
+                identifier = practioner_mapping['identifier'].value
+            practitioner = self.template_practitioner()
+            practitioner.id = self.mint_id(identifier=identifier, resource_type='Practitioner')
+            practitioner.identifier = [identifier]
+            practitioner.name = [HumanName(**{"text": str(identifier.value)})]
 
-        for field, info in practioner_mapping.items():
-            if field == 'identifier':
+            organization_ = self.resource_mapping['Organization']
+            has_project = False
+            if organization_ and 'identifier' in organization_.keys() and hasattr(organization_['identifier'],
+                                                                                  'value') and organization_[
+                'identifier'].value:
+                org_identifier = self.populate_identifier(value=organization_['identifier'].value.value)
+                organization_id = self.mint_id(identifier=org_identifier, resource_type='Organization')
+                if organization_id:
+                    practitioner.qualification = [{"issuer": {"reference": f"Organization/{organization_id}"},
+                                                   "code": CodeableConcept(**{"coding": [{"code": "PHD",
+                                                                                          "system": "http://terminology.hl7.org/CodeSystem/v2-0360",
+                                                                                          "display": "Doctor of Philosophy"}]})}]
+                    has_project = True
+            if not has_project and 'partOf' in organization_.keys() and hasattr(organization_['partOf'],'value') and organization_['partOf'].value:
+                org_identifier = self.populate_identifier(value=organization_['partOf'].value)
+                organization_id = self.mint_id(identifier=org_identifier, resource_type='Organization')
+                if organization_id:
+                    practitioner.qualification = [{"issuer": {"reference": f"Organization/{organization_id}"},
+                                                   "code": CodeableConcept(**{"coding": [{"code": "PHD",
+                                                                                          "system": "http://terminology.hl7.org/CodeSystem/v2-0360",
+                                                                                          "display": "Doctor of Philosophy"}]})}]
+
+            for field, info in practioner_mapping.items():
+                if field == 'identifier':
+                    # already processed this
+                    continue
+                setattr(practitioner, field, info['value'])
+
+            return practitioner
+        else:
+            return None
+
+    def create_organization(self, generated_resources: list[Resource]) -> Organization | None:
+        """Create a FHIR organization."""
+        if 'Organization' not in self.resource_mapping:
+            return None
+
+        organization_mapping = self.resource_mapping['Organization']
+        assert 'identifier' in organization_mapping, f"Organization must have an identifier {self}"
+
+        _identifier_value = organization_mapping['identifier'].value
+
+        if hasattr(_identifier_value, 'value') and _identifier_value.value:
+            _identifier_value = _identifier_value.value
+        elif not isinstance(_identifier_value, str):
+            return None
+
+        _part_of = None
+        program_organization = None
+        if organization_mapping['partOf'].value:
+            program_identifier = self.populate_identifier(value=organization_mapping['partOf'].value)
+            program_id = self.mint_id(identifier=program_identifier, resource_type='Organization')
+            # print(f"capturing part of {organization_mapping['partOf'].value}")
+            _part_of = Reference(**{"reference": f"Organization/{program_id}"})
+
+            program_organization = Organization(**{"id": program_id,
+                                                   "identifier": [program_identifier],
+                                                   "partOf": None})  # requires a lot of code change to return lits[Organization]
+
+        identifier = self.populate_identifier(value=_identifier_value)
+        organization = Organization(**{"id": self.mint_id(identifier=identifier, resource_type='Organization'),
+                                       "identifier": [identifier],
+                                       "partOf": _part_of})
+
+        for field, info in organization_mapping.items():
+            if field == 'identifier' or field == 'partOf':
                 # already processed this
                 continue
-            setattr(practitioner, field, info['value'])
+            setattr(organization, field, info['value'])
 
-        return practitioner
+        return organization
 
-    def create_patient(self, generated_resources: list[Resource]) -> Patient | None:
+    def create_patient(self, generated_resources: list[Resource]) -> Patient | Group | None:
         """Create a patient."""
         if 'Patient' not in self.resource_mapping:
             return None
 
         patient_mapping = self.resource_mapping['Patient']
         assert 'identifier' in patient_mapping, f"Patient must have an identifier {self}"
+
+        if "," in patient_mapping['identifier'].value:
+            patient_identifier_values = patient_mapping['identifier'].value.split(',')
+            patient_identifier_values = [x.strip() for x in patient_identifier_values]
+            patient_identifier_values.sort()
+
+            members = []
+            for group_member_identifier in patient_identifier_values:
+                _gp_ident = self.populate_identifier(value=group_member_identifier)
+                patient_group_member = self.template_patient()
+                patient_group_member.id = self.mint_id(identifier=_gp_ident,
+                                                       resource_type='Patient')  # we assume we only have patient groups atm
+                patient_group_member.identifier = [_gp_ident]
+                # self.create_patient([patient_group_member]) # create the patient in group
+                members.append(
+                    GroupMember(**{'entity': Reference(**{"reference": f"Patient/{patient_group_member.id}"})}))
+
+            # order of comma seperated values may change the mint id
+            # sort the identifiers
+            group_identifier = self.populate_identifier(value=','.join(patient_identifier_values))
+            group_id = self.mint_id(identifier=group_identifier, resource_type='Group')
+            group = Group(**{'id': group_id, "identifier": [group_identifier], "membership": 'definitional',
+                             'member': members, "type": "person"})
+            return group
+
         identifier = self.populate_identifier(value=patient_mapping['identifier'].value)
         patient = self.template_patient()
         patient.id = self.mint_id(identifier=identifier, resource_type='Patient')
@@ -280,7 +397,8 @@ class FHIRTransformer(BaseModel):
 
         return patient
 
-    def create_specimen(self, patient: Patient | None, generated_resources: list[Resource]) -> Specimen | None:
+    def create_specimen(self, patient: Patient | None, generated_resources: list[Resource],
+                        group: Group | None, organization: Organization | None) -> Specimen | None:
         """Create a specimen."""
         if 'Specimen' not in self.resource_mapping:
             return None
@@ -288,18 +406,43 @@ class FHIRTransformer(BaseModel):
         assert 'identifier' in specimen_mapping, f"Specimen must have an identifier {self}"
         if not specimen_mapping['identifier'].value:
             return None
-        identifier = self.populate_identifier(value=specimen_mapping['identifier'].value)
 
+        specimen_identifier = []
+        identifier = None
+        if isinstance(specimen_mapping['identifier'].value, list):
+            # case where there are multiple specimens associated with a record
+            # if len(specimen_mapping['identifier'].value) > 1:
+            # print(specimen_mapping['identifier'].value)s
+            identifier = [_i for _i in specimen_mapping['identifier'].value if _i.system == self._helper.system][0]
+            specimen_identifier = specimen_mapping['identifier'].value
+        else:
+            identifier = self.populate_identifier(value=specimen_mapping['identifier'].value)
+            specimen_identifier.append(identifier)
+
+        assert identifier, f"Identifier must be created before Specimen {self}"
         assert patient, f"Patient must be created before Specimen {self}"
+
         specimen = self.template_specimen(subject=self.to_reference(patient))
-        specimen.identifier = [identifier]
+        specimen.identifier = specimen_identifier
         specimen.id = self.mint_id(identifier=identifier, resource_type='Specimen')
 
-        practioner = next(iter([_ for _ in generated_resources if _.resource_type == 'Practitioner']), None)
-        if practioner:
-            if not specimen.collection:
-                specimen.collection = SpecimenCollection()
-            specimen.collection.collector = self.to_reference(practioner)
+        practitioner = next(iter([_ for _ in generated_resources if _.get_resource_type() == 'Practitioner']), None)
+
+        if not organization:
+            organization = next(iter([_ for _ in generated_resources if _.get_resource_type() == 'Organization']), None)
+
+        if practitioner:
+            practitioner_reference = self.to_reference(practitioner)
+            if practitioner_reference.reference:
+                if not specimen.collection:
+                    specimen.collection = SpecimenCollection()
+                specimen.collection.collector = practitioner_reference
+        # elif organization:
+        #     organization_reference = self.to_reference(organization)
+        #     if organization_reference.reference:
+        #         if not specimen.collection:
+        #             specimen.collection = SpecimenCollection()
+        #         specimen.collection.collector = organization_reference
 
         for field, info in specimen_mapping.items():
             if field == 'identifier':
@@ -313,31 +456,39 @@ class FHIRTransformer(BaseModel):
                 logger.warning(f"Specimen has no field {field} {info['value']}")
                 continue
             try:
-                value = info.value
-                # TODO - there should be a more elegant way to do this
-                # TODO for now, let's maintain these nested fields manually :-(  - need to use templates
-                # if 'collection.bodySite' == field:
-                #     specimen.collection.bodySite = self.to_codeable_reference(concept=self.populate_codeable_concept(code=value, display=value))
-                #     continue
-                # if 'processing[0].method' == field:
-                #     specimen.processing[0].method = self.populate_codeable_concept(code=value, display=value)
-                #     continue
-                # if 'parent' == field:
-                #     parent_identifier = self.populate_identifier(value=value)
-                #     parent_id = self.mint_id(identifier=parent_identifier, resource_type='Specimen')
-                #     specimen.parent = [Reference(reference=f"Specimen/{parent_id}")]
-                #     continue
+                if 'parent' == field:
+                    if isinstance(info, list) and len(info) > 0:
+                        specimen.parent = info
+                        # [setattr(specimen, field, item) for item in info] generates error: AttributeError: 'list' object has no attribute 'value'
+                    else:
+                        continue
+                else:
+                    value = info.value
 
-                if field not in specimen.__fields__:
-                    if f'not_found_{field}' not in self.logged_already:
-                        logger.debug(f"{field} not found in Specimen, handle in transformer")
-                        self.logged_already.append(f'not_found_{field}')
-                    continue
+                    # TODO - there should be a more elegant way to do this
+                    # TODO for now, let's maintain these nested fields manually :-(  - need to use templates
+                    # if 'collection.bodySite' == field:
+                    #     specimen.collection.bodySite = self.to_codeable_reference(concept=self.populate_codeable_concept(code=value, display=value))
+                    #     continue
+                    # if 'processing[0].method' == field:
+                    #     specimen.processing[0].method = self.populate_codeable_concept(code=value, display=value)
+                    #     continue
+                    # if 'parent' == field:
+                    #     parent_identifier = self.populate_identifier(value=value)
+                    #     parent_id = self.mint_id(identifier=parent_identifier, resource_type='Specimen')
+                    #     specimen.parent = [Reference(reference=f"Specimen/{parent_id}")]
+                    #     continue
 
-                if specimen.__fields__[field].outer_type_ == CodeableConceptType:
-                    value = self.populate_codeable_concept(code=value, display=value)
+                    if field not in specimen.__fields__:
+                        if f'not_found_{field}' not in self.logged_already:
+                            logger.debug(f"{field} not found in Specimen, handle in transformer")
+                            self.logged_already.append(f'not_found_{field}')
+                        continue
 
-                setattr(specimen, field, value)
+                    if specimen.__fields__[field].outer_type_ == CodeableConceptType:
+                        value = self.populate_codeable_concept(code=value, display=value)
+
+                    setattr(specimen, field, value)
 
             except Exception as e:
                 logger.error(f"Error setting field {field} to {info.value}: {e}")
@@ -389,7 +540,8 @@ class FHIRTransformer(BaseModel):
             if 'procedure_identifier' not in self.logged_already:
                 logger.warning(f"Procedure SHOULD have an identifier {self}, creating from patient identifier")
                 self.logged_already.append('procedure_identifier')
-            identifier = self.populate_identifier(value=patient.identifier[0].value + '/Procedure/' + procedure_mapping['code'].value)
+            identifier = self.populate_identifier(
+                value=patient.identifier[0].value + '/Procedure/' + procedure_mapping['code'].value)
         else:
             identifier = self.populate_identifier(value=procedure_mapping['identifier'].value)
 
@@ -417,6 +569,380 @@ class FHIRTransformer(BaseModel):
         )
         return research_subject
 
+    @staticmethod
+    def fetch_chembl_data(compounds: list, limit: int) -> list:
+        def get_chembl_compound_info(db_file_path: str, drug_names: list, _limit=limit) -> list:
+            """Query Chembl COMPOUND_RECORDS by COMPOUND_NAME for FHIR Substance"""
+            assert drug_names, "The drug_names list is empty. Please provide at least one drug name."
+
+            if len(drug_names) == 1:
+                _drug_names = f"('{drug_names[0].upper()}')"
+            else:
+                _drug_names = tuple([x.upper() for x in drug_names])
+
+            query = f"""
+            SELECT DISTINCT 
+                a.CHEMBL_ID,
+                c.STANDARD_INCHI,
+                c.CANONICAL_SMILES,
+                cr.COMPOUND_NAME
+            FROM 
+                MOLECULE_DICTIONARY as a
+            LEFT JOIN 
+                COMPOUND_STRUCTURES as c ON a.MOLREGNO = c.MOLREGNO
+            LEFT JOIN 
+                ACTIVITIES as p ON a.MOLREGNO = p.MOLREGNO
+            LEFT JOIN 
+                compound_records as cr ON a.MOLREGNO = cr.MOLREGNO
+            LEFT JOIN
+                source as sr ON cr.SRC_ID = sr.SRC_ID
+            WHERE cr.COMPOUND_NAME IN {_drug_names}
+            LIMIT {str(_limit)};
+            """
+            conn = sqlite3.connect(db_file_path)
+            cursor = conn.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+
+            conn.close()
+
+            return rows
+
+        def tuple_to_dict(keys, values):
+            return dict(zip(keys, values))
+
+        drug_compound_data = get_chembl_compound_info(db_file_path=CHEMBL_DB_PATH, drug_names=compounds)
+
+        key_info = ["CHEMBL_ID", "STANDARD_INCHI", "CANONICAL_SMILES", "COMPOUND_NAME"]
+        _dict_list = []
+        for item in drug_compound_data:
+            _dict_list.append(tuple_to_dict(key_info, item))
+        return _dict_list
+
+    @staticmethod
+    def create_substance_definition_representations(drug_data: list) -> list:
+        representations = []
+        for row in drug_data:
+            if 'STANDARD_INCHI' in row and row['STANDARD_INCHI'] is not None:
+                representations.append(SubstanceDefinitionStructureRepresentation(
+                    **{"representation": row['STANDARD_INCHI'],
+                       "format": CodeableConcept(**{"coding": [{"code": "InChI",
+                                                                "system": 'http://hl7.org/fhir/substance-representation-format',
+                                                                "display": "InChI"}]})}))
+
+            if 'CANONICAL_SMILES' in row and row['CANONICAL_SMILES'] is not None:
+                representations.append(SubstanceDefinitionStructureRepresentation(
+                    **{"representation": row['CANONICAL_SMILES'],
+                       "format": CodeableConcept(**{"coding": [{"code": "SMILES",
+                                                                "system": 'http://hl7.org/fhir/substance-representation-format',
+                                                                "display": "SMILES"}]})}))
+        return representations
+
+    def create_substance_definition(self, compound_name: str, representations: list) -> SubstanceDefinition:
+        sub_def_identifier = Identifier(**{"system": self.SYSTEM_chEMBL, "value": compound_name, "use": "official"})
+        sub_def_id = self.mint_id(identifier=sub_def_identifier, resource_type="SubstanceDefinition")
+
+        return SubstanceDefinition(**{"id": sub_def_id,
+                                      "identifier": [sub_def_identifier],
+                                      "structure": SubstanceDefinitionStructure(**{"representation": representations}),
+                                      "name": [SubstanceDefinitionName(**{"name": compound_name})]
+                                      })
+
+    def create_substance(self, compound_name: str, substance_definition: SubstanceDefinition) -> Substance:
+        code = None
+        if substance_definition:
+            code = CodeableReference(
+                **{"concept": CodeableConcept(**{"coding": [
+                    {"code": compound_name, "system": "/".join([self.SYSTEM_chEMBL, "compound_name"]),
+                     "display": compound_name}]}),
+                   "reference": Reference(**{"reference": f"SubstanceDefinition/{substance_definition.id}"})})
+
+        sub_identifier = Identifier(
+            **{"system": self.SYSTEM_chEMBL, "value": compound_name, "use": "official"})
+        sub_id = self.mint_id(identifier=sub_identifier, resource_type="Substance")
+
+        return Substance(**{"id": sub_id,
+                            "identifier": [sub_identifier],
+                            "instance": True,  # place-holder
+                            "category": [CodeableConcept(**{"coding": [{"code": "drug",
+                                                                        "system": "http://terminology.hl7.org/CodeSystem/substance-category",
+                                                                        "display": "Drug or Medicament"}]})],
+                            "code": code})
+
+    def create_medication(self, compound_name: Optional[str], treatment_type: Optional[str],
+                          _substance: Optional[Substance], generated_resources: list[Resource]) -> Medication:
+
+        if compound_name:
+            if ":" in compound_name:
+                compound_name.replace(":", "_")
+            code = CodeableConcept(**{"coding": [
+                {"code": compound_name, "system": "/".join([self.SYSTEM_chEMBL, "compound_name"]),
+                 "display": compound_name}]})
+
+            med_identifier = Identifier(
+                **{"system": self.SYSTEM_chEMBL, "value": compound_name, "use": "official"})
+        else:
+            if ":" in treatment_type:
+                treatment_type.replace(":", "_")
+
+            code = CodeableConcept(**{
+                "coding": [{"code": treatment_type,
+                            "system": "/".join([self._helper.system, "treatment_type"]),  # TODO: change
+                            "display": treatment_type}]})
+
+            med_identifier = Identifier(
+                **{"system": self._helper.system, "value": treatment_type, "use": "official"})
+
+        med_id = self.mint_id(identifier=med_identifier, resource_type="Medication")
+
+        ingredients = []
+        if _substance:
+            ingredients.append(MedicationIngredient(**{
+                "item": CodeableReference(
+                    **{"reference": Reference(**{"reference": f"Substance/{_substance.id}"})})}))
+
+        return Medication(**{"id": med_id,
+                             "identifier": [med_identifier],
+                             "code": code,
+                             "ingredient": ingredients})
+
+    def chembl2medication(self, generate_resources: list[Resource]):
+        # duplicate attempt to pull out query logic
+        medications = []
+
+        for field, field_info in self.model_fields.items():
+            if not field_info.json_schema_extra:
+                continue
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.medication" or \
+                    field_info.json_schema_extra['fhir_resource_type'] == "Medication.ingredient":
+                medication_name = getattr(self, field)
+                if medication_name:
+                    medications.append(medication_name)
+
+        chembl_information = self.fetch_chembl_data(medications, limit=1000)
+
+        if chembl_information:
+            drug_name = []
+            for row in chembl_information:
+                if 'COMPOUND_NAME' in row and row['COMPOUND_NAME'] is not None:
+                    drug_name.append(row['COMPOUND_NAME'])
+            study_drugs = list(set(drug_name))
+
+            for medication_name in study_drugs:
+                drug_chembl_data = []
+                for row in chembl_information:
+                    if ('COMPOUND_NAME' in row and row['COMPOUND_NAME']
+                            is not None and row['COMPOUND_NAME'] == medication_name):
+                        drug_chembl_data.append(row)
+
+                if drug_chembl_data:
+                    sdr = self.create_substance_definition_representations(drug_chembl_data)
+                    if sdr:
+                        sd = self.create_substance_definition(compound_name=medication_name, representations=sdr)
+                        if sd:
+                            generate_resources.append(sd)
+                            substance = self.create_substance(compound_name=medication_name, substance_definition=sd)
+                            if substance:
+                                generate_resources.append(substance)
+                                medication = self.create_medication(compound_name=medication_name, treatment_type=None,
+                                                                    _substance=substance,
+                                                                    generated_resources=generate_resources)
+                                if medication:
+                                    generate_resources.append(medication)
+
+            return generate_resources
+
+    def create_medication_administration(self, patient: Patient,
+                                         generated_resources: list[Resource]) -> list[Resource] | None:
+        """
+        creates MedicationAdministration
+            - if treatment type or drug name exists - make MedicationAdministration
+            - if treatment end index days exists, then status -> completed, else status is defined by user
+                (matching fhir requirnments) or unknown
+            - if drug name is null, then Medication.code -> snomed_code: Unknown 261665006
+            - Medication.ingredient.item -> Substance.code -> SubstanceDefinition
+            - status, medication, subject are required by FHIR
+        """
+        # TODO: this function runs 5s per record which can add up on 1000+ records will have to create all Medications prior to this call
+        assert patient, f"Medication Administration requires the patient information"
+
+        status = None
+        medication = None
+        medication_name = None
+        index_end = None
+        index_start = None
+        admin_reason = []
+        status_reason = []
+        status_reason_value = None
+        total_dose_quantity = None
+        dose_route_code = None
+        dose_rate_quantity = None
+        med_admin_dosage = None
+        substance = None
+        secondary_identifier = None
+
+        note = []
+
+        for field, field_info in self.model_fields.items():
+            if not field_info.json_schema_extra:
+                continue
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.medication" or \
+                    field_info.json_schema_extra['fhir_resource_type'] == "Medication.ingredient":
+                medication_name = getattr(self, field)
+
+                drug_chembl_data = self.fetch_chembl_data([medication_name], limit=50)
+
+                if drug_chembl_data:
+                    sdr = self.create_substance_definition_representations(drug_chembl_data)
+                    if sdr:
+                        sd = self.create_substance_definition(compound_name=medication_name, representations=sdr)
+                        if sd:
+                            generated_resources.append(sd)
+                            substance = self.create_substance(compound_name=medication_name, substance_definition=sd)
+                            if substance:
+                                generated_resources.append(substance)
+
+                # not all med have chembl information
+                medication = self.create_medication(compound_name=medication_name, treatment_type=None,
+                                                    _substance=substance,
+                                                    generated_resources=generated_resources)
+                if medication:
+                    generated_resources.append(medication)
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.reason.concept":
+                admin_reason_value = getattr(self, field)
+                if admin_reason_value:
+                    admin_reason = [CodeableReference(
+                        **{"concept": CodeableConcept(**{
+                            "coding": [{"code": admin_reason_value,
+                                        "system": self._helper.system,
+                                        "display": admin_reason_value}]})})]
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.statusReason":
+                status_reason_value = getattr(self, field)
+
+                if status_reason_value:
+                    status_reason = [CodeableConcept(**{"coding": [{
+                        "code": status_reason_value,
+                        "system": self._helper.system,
+                        "display": status_reason_value}]})]
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.dosage.dose":
+                total_dose = getattr(self, field)
+                if total_dose:
+                    total_dose_quantity = Quantity(**{"value": round(total_dose, 2)})
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.dosage.rateQuantity":
+                dose_rate = getattr(self, field)
+                if dose_rate:
+                    dose_rate_quantity = Quantity(**{"value": round(dose_rate, 2)})
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.dosage.route":
+                dose_route = getattr(self, field)
+                if not dose_route:
+                    dose_route = "Unknown"
+                dose_route_code = CodeableConcept(**{
+                    "coding": [{"code": dose_route,
+                                "system": self._helper.system,
+                                "display": dose_route}]})
+
+            if total_dose_quantity:
+                med_admin_dosage = MedicationAdministrationDosage(**{"dose": total_dose_quantity,
+                                                                     "route": dose_route_code,
+                                                                     "rateQuantity": dose_rate_quantity})
+                # print(f"MedicationAdministration dosage: {med_admin_dosage.json()}")
+
+            if field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.note":
+                note_content = getattr(self, field)
+                if note_content:
+                    note.append(Annotation(**{"text": note_content}))
+
+            if field_info.json_schema_extra[
+                'fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.high":
+                index_end = getattr(self,
+                                    field)  # TODO: do we need a more general way to define treatment was completed/stopped?
+                status = "completed"
+            elif field_info.json_schema_extra['fhir_resource_type'] == "MedicationAdministration.status":
+                status_value = getattr(self, field)
+                if status_reason_value:
+                    status = 'stopped'
+                elif status_value in ['in-progress', 'not-done', 'on-hold', 'completed', 'entered-in-error', 'stopped',
+                                      'unknown']:
+                    status = status_value
+                else:
+                    status = "unknown"
+
+            if field_info.json_schema_extra[
+                'fhir_resource_type'] == "MedicationAdministration.occurrenceTiming.boundsRange.low":
+                index_start = getattr(self, field)
+
+        timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(**{"low": Quantity(**{"value": 0}),
+                                                                             "high": Quantity(**{
+                                                                                 "value": 1})})})})  # place holder - required by FHIR
+        if index_start and index_end:
+            timing = Timing(**{"repeat": TimingRepeat(**{"boundsRange": Range(
+                **{"low": Quantity(**{"value": int(index_start)}), "high": Quantity(**{"value": int(index_end)})})})})
+
+        # add in date notion to identifier
+        medication_admin_identifier = Identifier(
+            **{"system": self._helper.system, "use": "official", "value": "-".join([patient.id, medication_name])})
+        medication_admin_id = self.mint_id(identifier=medication_admin_identifier,
+                                           resource_type="MedicationAdministration")
+
+        medication_code = CodeableConcept(**{"coding": [{"code": medication_name,
+                                                         "system": self._helper.system,
+                                                         "display": medication_name}]})
+
+        if not medication:
+            # information not in chembl
+            med_identifier = Identifier(
+                **{"system": self._helper.system, "value": medication_name, "use": "official"})
+
+            med_id = self.mint_id(identifier=med_identifier, resource_type="Medication")
+
+            code = CodeableConcept(**{
+                "coding": [{"code": medication_name,
+                            "system": "/".join([self._helper.system, "medication"]),
+                            "display": medication_name}]})
+
+            medication = Medication(**{"id": med_id,
+                                       "identifier": [med_identifier],
+                                       "code": code})
+
+        medication_codeable_reference = CodeableReference(**{"concept": medication_code, "reference": Reference(
+            **{"reference": f"Medication/{medication.id}"})})
+
+        # ingredient.strengthQuantity.unit
+        # ingredient.strengthQuantity.value
+
+        _identifiers = []
+        if self.medication_administration_identifier:
+            _identifiers = self.medication_administration_identifier
+        elif medication_admin_identifier:
+            _identifiers.append(medication_admin_identifier)
+
+        data = {"id": medication_admin_id,
+                "identifier": _identifiers,
+                "status": status,
+                "statusReason": status_reason,
+                "reason": admin_reason,
+                "medication": medication_codeable_reference,
+                "subject": {
+                    "reference": f"Patient/{patient.id}"
+                },
+                "occurenceTiming": timing,
+                "dosage": med_admin_dosage,
+                "note": note}
+
+        med_admin = MedicationAdministration(**data)
+
+        if med_admin:
+            generated_resources.append(med_admin)
+            # print(med_admin.json(), "\n")
+        return generated_resources
+
     def default_transform(self, research_study: ResearchStudy) -> list[Resource]:
         """Default transformation, call this method if you don't want to implement your own transform."""
 
@@ -428,12 +954,16 @@ class FHIRTransformer(BaseModel):
         if practioner:
             generated_resources.extend([practioner])
 
+        organization = self.create_organization(generated_resources)
+        if organization:
+            generated_resources.extend([organization])
+
         patient = self.create_patient(generated_resources)
         if patient:
             research_subject = self.create_research_subject(patient, research_study)
             generated_resources.extend([patient, research_subject])
 
-        specimen = self.create_specimen(patient, generated_resources)
+        specimen = self.create_specimen(patient, generated_resources, group=None, organization=organization)
         if specimen:
             generated_resources.append(specimen)
 
@@ -445,6 +975,17 @@ class FHIRTransformer(BaseModel):
         if procedure:
             generated_resources.append(procedure)
 
+        # self.chembl2medication(generated_resources)
+        has_medication_mapping = any(
+            "Medication" in field_info.json_schema_extra.get('fhir_resource_type', '') or
+            "MedicationAdministration.medication" in field_info.json_schema_extra.get('fhir_resource_type', '')
+            for field, field_info in self.model_fields.items()
+        )
+
+        if has_medication_mapping:
+            print("Creating MedicationAdministration----")
+            self.create_medication_administration(patient, generated_resources)
+
         generated_observations = []
         for _ in generated_resources:
             observations = self.create_observations(subject=patient, focus=_)
@@ -455,7 +996,7 @@ class FHIRTransformer(BaseModel):
         assert all([_ for _ in generated_resources]), "Should not have a None"
         return generated_resources
 
-    def create_observations(self, subject, focus) -> list[Observation]:
+    def create_observations(self, subject, focus, jinja_observation_code=None) -> list[Observation]:
         """Create observations."""
         observations = []
 
@@ -464,19 +1005,45 @@ class FHIRTransformer(BaseModel):
         observation_components = {}
         observation_identifier = None
         observation_code = None
+        observation = None
+        components = []
+        observation_focus = None
+        focus_resource_type = None
+        resource_type = None
+
         for field, field_info in self.model_fields.items():  # noqa - implementers must implement this method ie inherit from BaseModel
             if not field_info.json_schema_extra:
                 continue
             if 'observation_subject' in field_info.json_schema_extra:
-                if field_info.json_schema_extra['observation_subject'] == focus.resource_type:
+                if isinstance(focus, list):
+                    resource_type = []
+                    for focus_item in focus:
+                        resource_type.append(focus_item.get_resource_type())
+                    if len(list(set(resource_type))) == 1 and resource_type[0] == field_info.json_schema_extra[
+                        'observation_subject']:
+                        focus_resource_type = field_info.json_schema_extra['observation_subject']
+                else:
+                    focus_resource_type = focus.get_resource_type()
+                if focus_resource_type == None and isinstance(focus, list):
+                    for focus_item in focus:
+                        resource_type.append(focus_item.get_resource_type())
+                    if len(list(set(resource_type))) == 1:
+                        focus_resource_type = resource_type[0]
+                    elif focus:
+                        focus_resource_type = focus[0].resource_type  # temp solution
+                if field_info.json_schema_extra['observation_subject'] == focus_resource_type:
                     observation_fields[field] = field_info
-            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.component':
+            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra[
+                'fhir_resource_type'] == 'Observation.component':
                 observation_components[field] = field_info
+
             # if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
             #     value = getattr(self, field)
             #     # this is when we want to create an observation all attributes in the row
             #     identifier = self.observation_identifier(value, focus, subject)
-            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.code':
+
+            if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra[
+                'fhir_resource_type'] == 'Observation.code':
                 value = getattr(self, field)
                 underscored_code = inflection.underscore(field)
                 display = field_info.description
@@ -486,109 +1053,225 @@ class FHIRTransformer(BaseModel):
                     display = 'Unknown'
                 observation_code = self.populate_codeable_concept(code=underscored_code, display=display)
 
+        for component_field, component_field_info in observation_components.items():
+            component_value = getattr(self, component_field)
+            underscored_component_field = inflection.underscore(component_field)
+            component = ObservationComponent(
+                code={
+                    'coding': [
+                        {
+                            'system': self._helper.system,
+                            'code': underscored_component_field,
+                            'display': component_field,
+                        }
+                    ],
+                    'text': component_field
+                }
+            )
 
-        # for all attributes in raw record ...
-        for field, field_info in observation_fields.items():
+            # TODO value[x]
+            field_type = str(component_field_info.annotation)
+            if 'int' in field_type:
+                component.valueInteger = getattr(self, component_field)
+            elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
+                component.valueQuantity = self.to_quantity(field=component_field, field_info=component_field_info,
+                                                           value=component_value)
+            elif 'bool' in field_type:
+                component_value = getattr(self, component_field)
+                if isinstance(component_value, bool):
+                    component.valueBoolean = component_value
 
-            # that are not null ...
-            value = getattr(self, field)
-            if not value:
-                continue
+            elif component_value and isinstance(getattr(self, component_field), str):
+                component_value = getattr(self, component_field)
+                component.valueString = str(component_value)
 
-            # this is when we want to create an observation for each attribute in the row
-            if not observation_identifier:
-                identifier = self.observation_identifier(field, focus, subject)
-                if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra['fhir_resource_type'] == 'Observation.identifier':
-                    value = getattr(self, field)
-                    # this is when we want to create an observation all attributes in the row
-                    identifier = self.observation_identifier(value, focus, subject)
-            else:
-                identifier = observation_identifier
+            if component:
+                components.append(component)
+                if isinstance(focus, list):
+                    observation_focus = [self.to_reference(_f) for _f in focus]
+                else:
+                    if component_field_info.json_schema_extra['observation_subject'] == focus.get_resource_type():
+                        observation_focus = [
+                            self.to_reference(focus)]  # should be the same focus reference for the component use-case
+        if isinstance(focus, list):
+            focus_reference = [self.to_reference(_f) for _f in focus]
+        else:
+            focus_reference = self.to_reference(focus)
 
-            id_ = self.mint_id(identifier=identifier, resource_type='Observation')
-            more_codings = additional_observation_codings(field_info)
+        if components and observation_focus:
+            code = None
+            observation_dict = self.render_template(f"Observation.yaml.jinja")
 
-            if not observation_code:
-                underscored_code = inflection.underscore(field)
-                display = field_info.description
-                if not display:
-                    display = value
-                code = self.populate_codeable_concept(code=underscored_code, display=display)
-            else:
-                code = observation_code
-
-            try:
-                observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
-            except Exception as e:
-                observation_dict = self.render_template(f"Observation.yaml.jinja")
-
-            # override the code
-            if 'code' in observation_dict:
-                del observation_dict['code']
+            if 'code' in observation_dict and not observation_code:
+                coding_list = observation_dict['code'].get('coding', [])
+                if coding_list or observation_dict['code'].get('text'):
+                    code = observation_dict['code']
+                    del observation_dict['code']
+                else:
+                    # print("empty or invalid 'code' field detected, assigning default:", observation_dict['code'])
+                    if "Specimen" in focus_reference.reference:
+                        code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                              code="68992-7",
+                                                              display="Specimen-related information panel")
+                    elif "Patient" in focus_reference.reference:
+                        code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                              code="68992-7",
+                                                              display="Specimen-related information panel")
+                    del observation_dict['code']
 
             observation = Observation(
                 **observation_dict,
                 code=code
             )
 
+            if jinja_observation_code:
+                field_code = jinja_observation_code
+            else:
+                field_code = code
+            identifier = self.observation_identifier(field=field_code, focus=focus, subject=subject)
+            assert identifier, f"Can't proceed, Observation with focus: {focus} is missing Identifier."
+            id_ = self.mint_id(identifier=identifier, resource_type='Observation')
+
             observation.id = id_
             observation.identifier = [identifier]
             observation.subject = self.to_reference(subject)
-            observation.focus = [self.to_reference(focus)]
+            observation.focus = observation_focus
 
-            if more_codings:
-                observation.code.coding.extend(more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
-
-            for component_field, component_field_info in observation_components.items():
-                component_value = getattr(self, component_field)
-                underscored_component_field = inflection.underscore(component_field)
-
-                component = ObservationComponent(
-                    code={
-                        'coding': [
-                            {
-                                'system': self._helper.system,
-                                'code': underscored_component_field,
-                                'display': component_field,
-                            }
-                        ],
-                        'text': component_field
-                    }
-                )
-
-                # TODO value[x]
-                field_type = str(component_field_info.annotation)
-                if 'int' in field_type:
-                    component.valueInteger = getattr(self, component_field)
-                elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
-                    component.valueQuantity = self.to_quantity(field=component_field, field_info=component_field_info, value=component_value)
-                else:
-                    component.valueString = getattr(self, component_field)
-
-
-                if not observation.component:
-                    observation.component = []
-                observation.component.append(component)
-
-            # if there are components, then the value[x] is not set
-            if not observation.component:
-                # value[x] the annotations are often decorated with Optional, so cast to string and check for the type
-                field_type = str(field_info.annotation)
-                if 'int' in field_type:
-                    observation.valueInteger = getattr(self, field)
-                elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
-                    observation.valueQuantity = self.to_quantity(field=field, field_info=field_info)
-                else:
-                    observation.valueString = getattr(self, field)
+            observation.component = components
 
             observations.append(observation)
+
+        if not components:
+            # for all attributes in raw record ...
+            for field, field_info in observation_fields.items():
+
+                # that are not null ...
+                value = getattr(self, field)
+                if not value:
+                    continue
+
+                # this is when we want to create an observation for each attribute in the row
+                identifier = None
+                if not observation_identifier:
+
+                    identifier = self.observation_identifier(field, focus, subject)
+                    if 'fhir_resource_type' in field_info.json_schema_extra and field_info.json_schema_extra[
+                        'fhir_resource_type'] == 'Observation.identifier':
+                        value = getattr(self, field)
+                        # this is when we want to create an observation all attributes in the row
+                        identifier = self.observation_identifier(value, focus, subject)
+                else:
+                    identifier = observation_identifier
+
+                id_ = self.mint_id(identifier=identifier, resource_type='Observation')
+                more_codings = additional_observation_codings(field_info)
+
+                try:
+                    observation_dict = self.render_template(f"Observation-{field}.yaml.jinja")
+                except Exception as e:
+                    observation_dict = self.render_template(f"Observation.yaml.jinja")
+
+                code = None
+                focus_reference = self.to_reference(focus)
+
+                if 'code' in observation_dict and not observation_code:
+                    coding_list = observation_dict['code'].get('coding', [])
+                    if coding_list or observation_dict['code'].get('text'):
+                        code = observation_dict['code']
+                        del observation_dict['code']
+                    else:
+                        # print("empty or invalid 'code' field detected, assigning default:", observation_dict['code'])
+                        if "Specimen" in focus_reference.reference:
+                            code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                                  code="68992-7",
+                                                                  display="Specimen-related information panel")
+                        elif "Patient" in focus_reference.reference:
+                            code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                                  code="68992-7",
+                                                                  display="Specimen-related information panel")
+                        del observation_dict['code']
+
+                if not code:
+                    if not observation_code and focus:
+                        # Default code: adding general required Observation code based on the focus of Observation
+                        if "Specimen" in focus_reference.reference:
+                            code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                                  code="68992-7",
+                                                                  display="Specimen-related information panel")
+                        elif "Patient" in focus_reference.reference:
+                            code = self.populate_codeable_concept(system="https://loinc.org/",
+                                                                  code="68992-7",
+                                                                  display="Specimen-related information panel")
+                    elif not observation_code and not focus:
+                        underscored_code = inflection.underscore(field)
+                        display = field_info.description
+                        if not display:
+                            display = value
+                        code = self.populate_codeable_concept(code=underscored_code, display=display)
+                    else:
+                        code = observation_code
+
+                observation = Observation(
+                    **observation_dict,
+                    code=code
+                )
+
+                observation.id = id_
+                observation.identifier = [identifier]
+                observation.subject = self.to_reference(subject)
+                observation.focus = [focus_reference]
+
+                # if there are components, then the value[x] is not set
+                if not observation.component:
+                    # value[x] the annotations are often decorated with Optional, so cast to string and check for the type
+                    field_type = str(field_info.annotation)
+                    if 'int' in field_type:
+                        observation.valueInteger = getattr(self, field)
+                    elif 'float' in field_type or 'decimal' in field_type or 'number' in field_type:
+                        observation.valueQuantity = self.to_quantity(field=field, field_info=field_info)
+                    else:
+                        observation.valueString = getattr(self, field)
+
+                # if we have component - remove value[x]
+                if observation.component:
+                    if hasattr(observation, 'valueInteger'):
+                        del observation.valueInteger
+                    if hasattr(observation, 'valueQuantity'):
+                        del observation.valueQuantity
+                    if hasattr(observation, 'valueString'):
+                        del observation.valueString
+
+                if more_codings:
+                    observation.code.coding.extend(
+                        more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
+
+            if observation:
+                observations.append(observation)
 
         return observations
 
     def observation_identifier(self, field, focus, subject):
         subject_identifier = self._helper.get_official_identifier(subject).value
-        focus_identifier = self._helper.get_official_identifier(focus).value
-        identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
+        if isinstance(focus, list):
+            focus_identifiers = [self._helper.get_official_identifier(_f).value for _f in focus]
+            focus_identifier = "-".join(focus_identifiers)
+        else:
+            focus_identifier = self._helper.get_official_identifier(focus).value
+
+        if field:
+            # print("in if", type(field), field)
+            if isinstance(field, dict):
+                if 'coding' in field.keys():
+                    field_code = field["coding"][0]['code']
+                    identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field_code}")
+                else:
+                    identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
+            else:
+                identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
+        else:
+            # component dependent
+            identifier = self.populate_identifier(value=f"{subject_identifier}-{focus_identifier}-{field}")
+
         return identifier
 
     def to_quantity(self, field_info: FieldInfo, field=None, value=None) -> dict:
@@ -618,7 +1301,7 @@ class FHIRTransformer(BaseModel):
 
     def to_reference(self, resource: Resource) -> Reference:
         """Create a reference from a resource of the form RESOURCE/id."""
-        return Reference(reference=f"{resource.resource_type}/{resource.id}")
+        return Reference(reference=f"{resource.get_resource_type()}/{resource.id}")
 
     def to_codeable_reference(self, *args: Any, **kwargs: Any) -> CodeableReference:
         """Create a reference from a resource of the form RESOURCE/id."""
@@ -665,6 +1348,11 @@ class FHIRTransformer(BaseModel):
         # dispatch to jinja
         return Practitioner(**self.render_template("Practitioner.yaml.jinja"))
 
+    def template_organization(self, *args: Any, **kwargs: Any) -> Organization:
+        """Create a generic organization."""
+        # dispatch to jinja
+        return Organization(**self.render_template("Organization.yaml.jinja"))
+
     @classmethod
     def template_dir(cls) -> pathlib.Path:
         """Return the template dir."""
@@ -692,6 +1380,8 @@ def generate_templates(target_template_dir: pathlib.Path, overwrite: bool = Fals
             click.secho(f"Created {target_template_path}", fg='green', file=sys.stderr)
 
     #  TODO - dynamically generate observation templates by loading the pydantic models
+
+
 #     transformer = cls()
 #     for _ in transformer.observation_mapping:
 #         target_template_path = target_template_dir / f"Observation-{_.field}.yaml.jinja"
@@ -766,8 +1456,54 @@ def register() -> None:
     factory.register(
         transformer=TRANSFORMER_CLASS
     )
-
 '''
+
+
+def is_valid_fhir_resource_type(resource_type):
+    """gets FHIR resource type string name"""
+    try:
+        model_class = get_fhir_model_class(resource_type)
+        return model_class is not None
+    except KeyError:
+        return False
+
+
+def create_or_extend(new_items, folder_path='META', resource_type='Observation', update_existing=False):
+    """create or extend onto an existing FHIR resource ndjson file """
+    assert is_valid_fhir_resource_type(resource_type), f"Invalid resource type: {resource_type}"
+
+    file_name = "".join([resource_type, ".ndjson"])
+    file_path = os.path.join(folder_path, file_name)
+
+    file_existed = os.path.exists(file_path)
+
+    existing_data = {}
+
+    if file_existed:
+        with open(file_path, 'r') as file:
+            for line in file:
+                try:
+                    item = orjson.loads(line)
+                    existing_data[item.get("id")] = item
+                except orjson.JSONDecodeError:
+                    continue
+
+    for new_item in new_items:
+        new_item_id = new_item["id"]
+        if new_item_id not in existing_data or update_existing:
+            existing_data[new_item_id] = new_item
+
+    with open(file_path, 'w') as file:
+        for item in existing_data.values():
+            file.write(orjson.dumps(item).decode('utf-8') + '\n')
+
+    if file_existed:
+        if update_existing:
+            print(f"{file_name} has new updates to existing data.")
+        else:
+            print(f"{file_name} has been extended, without updating existing data.")
+    else:
+        print(f"{file_name} has been created.")
 
 
 def generate_transformer(submission_source_path: pathlib.Path, overwrite: bool = False) -> None:
