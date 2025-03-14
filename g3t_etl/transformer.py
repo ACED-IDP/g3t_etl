@@ -51,7 +51,7 @@ from pydantic import BaseModel
 from g3t_etl import TransformerHelper, Transformer
 
 logger = logging.getLogger(__name__)
-CHEMBL_DB_PATH = "/Users/sanati/KCRB/g3t_etl/resources/chembl/chembl_34.db"
+CHEMBL_DB_PATH = "./resources/chembl/chembl_34.db"
 
 
 class TemplateHelper:
