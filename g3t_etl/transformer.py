@@ -397,9 +397,9 @@ class FHIRTransformer(BaseModel):
 
         return patient
 
+
     def create_specimen(self, patient: Patient | None, generated_resources: list[Resource],
                         group: Group | None, organization: Organization | None) -> Specimen | None:
-        """Create a specimen."""
         if 'Specimen' not in self.resource_mapping:
             return None
         specimen_mapping = self.resource_mapping['Specimen']
@@ -410,9 +410,6 @@ class FHIRTransformer(BaseModel):
         specimen_identifier = []
         identifier = None
         if isinstance(specimen_mapping['identifier'].value, list):
-            # case where there are multiple specimens associated with a record
-            # if len(specimen_mapping['identifier'].value) > 1:
-            # print(specimen_mapping['identifier'].value)s
             identifier = [_i for _i in specimen_mapping['identifier'].value if _i.system == self._helper.system][0]
             specimen_identifier = specimen_mapping['identifier'].value
         else:
@@ -427,7 +424,6 @@ class FHIRTransformer(BaseModel):
         specimen.id = self.mint_id(identifier=identifier, resource_type='Specimen')
 
         practitioner = next(iter([_ for _ in generated_resources if _.get_resource_type() == 'Practitioner']), None)
-
         if not organization:
             organization = next(iter([_ for _ in generated_resources if _.get_resource_type() == 'Organization']), None)
 
@@ -437,62 +433,41 @@ class FHIRTransformer(BaseModel):
                 if not specimen.collection:
                     specimen.collection = SpecimenCollection()
                 specimen.collection.collector = practitioner_reference
-        # elif organization:
-        #     organization_reference = self.to_reference(organization)
-        #     if organization_reference.reference:
-        #         if not specimen.collection:
-        #             specimen.collection = SpecimenCollection()
-        #         specimen.collection.collector = organization_reference
 
+        # additional fields from specimen_mapping.
         for field, info in specimen_mapping.items():
-            if field == 'identifier':
-                # already processed this
-                continue
-            if field == 'subject':
-                # already processed this
+            if field in ['identifier', 'subject']:
                 continue
             field_root = field.split('.')[0].split('[')[0]
             if not hasattr(specimen, field_root):
                 logger.warning(f"Specimen has no field {field} {info['value']}")
                 continue
             try:
-                if 'parent' == field:
-                    if isinstance(info, list) and len(info) > 0:
-                        specimen.parent = info
-                        # [setattr(specimen, field, item) for item in info] generates error: AttributeError: 'list' object has no attribute 'value'
-                    else:
-                        continue
+                if field == 'parent' or (
+                        isinstance(info, dict) and
+                        info.get('json_schema_extra', {}).get('fhir_resource_type', '').lower() == 'specimen.parent'
+                ):
+                    continue
+                elif isinstance(info, list) and len(info) > 0:
+                    specimen.parent = info
                 else:
                     value = info.value
-
-                    # TODO - there should be a more elegant way to do this
-                    # TODO for now, let's maintain these nested fields manually :-(  - need to use templates
-                    # if 'collection.bodySite' == field:
-                    #     specimen.collection.bodySite = self.to_codeable_reference(concept=self.populate_codeable_concept(code=value, display=value))
-                    #     continue
-                    # if 'processing[0].method' == field:
-                    #     specimen.processing[0].method = self.populate_codeable_concept(code=value, display=value)
-                    #     continue
-                    # if 'parent' == field:
-                    #     parent_identifier = self.populate_identifier(value=value)
-                    #     parent_id = self.mint_id(identifier=parent_identifier, resource_type='Specimen')
-                    #     specimen.parent = [Reference(reference=f"Specimen/{parent_id}")]
-                    #     continue
-
                     if field not in specimen.__fields__:
                         if f'not_found_{field}' not in self.logged_already:
                             logger.debug(f"{field} not found in Specimen, handle in transformer")
                             self.logged_already.append(f'not_found_{field}')
                         continue
-
                     if specimen.__fields__[field].outer_type_ == CodeableConceptType:
                         value = self.populate_codeable_concept(code=value, display=value)
-
                     setattr(specimen, field, value)
-
             except Exception as e:
                 logger.error(f"Error setting field {field} to {info.value}: {e}")
                 raise e
+
+        computed_parent = self.parent
+        if computed_parent:
+            specimen.parent = computed_parent
+
         return specimen
 
     def create_condition(self, patient: Patient | None, generated_resources: list[Resource]) -> Condition | None:
@@ -1244,7 +1219,6 @@ class FHIRTransformer(BaseModel):
                 if more_codings:
                     observation.code.coding.extend(
                         more_codings)  # noqa - unclear? Unresolved attribute reference 'coding' for class 'CodeableConceptType'
-
             if observation:
                 observations.append(observation)
 

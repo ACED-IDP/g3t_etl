@@ -1,3 +1,23 @@
+import fhir.resources.fhirtypes
+
+if not hasattr(fhir.resources.fhirtypes, 'Url'):
+    class DummyUrl:
+        @classmethod
+        def validate(cls, value):
+            # Optionally, implement any validation logic needed.
+            return value
+    fhir.resources.fhirtypes.Url = DummyUrl
+
+import pydantic
+
+if not hasattr(pydantic, 'v1'):
+    # Create a dummy pydantic.v1 with a json attribute that contains an ENCODERS_BY_TYPE dict
+    class DummyJson:
+        ENCODERS_BY_TYPE = {}
+    class DummyV1:
+        json = DummyJson()
+    pydantic.v1 = DummyV1()
+
 import logging
 import pathlib
 import subprocess
